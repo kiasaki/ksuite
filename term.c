@@ -101,7 +101,7 @@ static void vte_write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *
 
 static void clipboard_copy(const char *text) {
   if (!text) return;
-  FILE *p = popen("xclip -selection clipboard", "w");
+  FILE *p = popen("xclip", "w");
   if (p) {
     fputs(text, p);
     pclose(p);
@@ -109,7 +109,7 @@ static void clipboard_copy(const char *text) {
 }
 
 static char *clipboard_paste(void) {
-  FILE *p = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+  FILE *p = popen("xclip -o 2>/dev/null", "r");
   if (!p) return NULL;
 
   char *buf = NULL;
@@ -340,6 +340,13 @@ static uint32_t get_unicode(int k, int shift) {
   return 0;
 }
 
+static void cancel_selection(void) {
+  if (selection_active) {
+    tsm_screen_selection_reset(screen);
+    selection_active = 0;
+  }
+}
+
 static void handle_key(int k, int mod) {
   int ctrl = mod & 1;
   int shift = mod & 2;
@@ -376,6 +383,8 @@ static void handle_key(int k, int mod) {
     tsm_screen_sb_page_down(screen, 1);
     return;
   }
+
+  cancel_selection();
 
   uint32_t keysym = fenster_key_to_xkb(k, shift);
   uint32_t unicode = get_unicode(k, shift);

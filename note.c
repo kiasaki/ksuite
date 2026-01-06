@@ -35,7 +35,7 @@ static int scroll_y = 0;
 
 static void clipboard_copy(const char *text) {
   if (!text) return;
-  FILE *p = popen("xclip -selection clipboard", "w");
+  FILE *p = popen("xclip", "w");
   if (p) {
     fputs(text, p);
     pclose(p);
@@ -43,7 +43,7 @@ static void clipboard_copy(const char *text) {
 }
 
 static char *clipboard_paste(void) {
-  FILE *p = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+  FILE *p = popen("xclip -o 2>/dev/null", "r");
   if (!p) return NULL;
 
   char *buf = NULL;
