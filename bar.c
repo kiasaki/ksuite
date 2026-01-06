@@ -15,7 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "chicago12.h"
+#include "fonts/chicago12.h"
 
 /* Base dimensions (unscaled) */
 #define BASE_BAR_HEIGHT 24

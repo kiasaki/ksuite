@@ -10,7 +10,7 @@
 #include <X11/cursorfont.h>
 #include <X11/extensions/Xinerama.h>
 
-#include "chicago12.h"
+#include "fonts/chicago12.h"
 
 static Atom wm_change_state;
 static Atom wm_state;

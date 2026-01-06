@@ -1,5 +1,5 @@
 #include "fenster.h"
-#include "newyork14.h"
+#include "fonts/newyork14.h"
 
 #include <stdio.h>
 #include <stdlib.h>

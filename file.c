@@ -1,6 +1,6 @@
 #define _DEFAULT_SOURCE 1
 #include "fenster.h"
-#include "chicago12.h"
+#include "fonts/chicago12.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <unistd.h>

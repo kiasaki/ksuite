@@ -1,7 +1,7 @@
 #define _XOPEN_SOURCE 600
 #define _GNU_SOURCE
 #include "fenster.h"
-#include "terminus16.h"
+#include "fonts/terminus16.h"
 
 #include <errno.h>
 #include <fcntl.h>
