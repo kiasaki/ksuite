@@ -373,10 +373,11 @@ static void draw_bar(void) {
         tab_x += tab_width;
     }
 
-    /* Draw status (root window name or time) */
+    /* Draw status (root window name or time) with background */
     int status_text_w = text_width(font, status_str, text_scale);
-    int status_text_x = screen_width - status_text_w - padding;
-    bar_text(font, status_text_x, text_y, status_str, text_scale, COLOR_TEXT);
+    int status_bg_x = screen_width - status_text_w - padding * 2;
+    bar_rect(status_bg_x, border_width, screen_width - status_bg_x, bar_height - border_width, COLOR_BG);
+    bar_text(font, status_bg_x + padding, text_y, status_str, text_scale, COLOR_TEXT);
 
     /* Update display */
     XPutImage(dpy, bar_win, gc, img, 0, 0, 0, 0, screen_width, bar_height);

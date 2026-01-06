@@ -189,21 +189,9 @@ static void draw(struct fenster *f) {
   
   fenster_rect(f, 0, 0, w, h, BG_COLOR);
   
-  int header_h = char_h + padding;
-  fenster_rect(f, 0, 0, w, header_h, HEADER_COLOR);
-  
-  int x = padding;
-  draw_text_clipped(f, x, padding / 2, "name", col_name_w - padding, FG_COLOR);
-  x += col_name_w;
-  draw_text_clipped(f, x - padding + (col_size_w-text_width("size")), padding / 2, "size", col_size_w - padding, FG_COLOR);
-  x += col_size_w;
-  draw_text_clipped(f, x - padding*2 + (col_date_w-text_width("modified")), padding / 2, "modified", col_date_w - padding, FG_COLOR);
-  
-  fenster_rect(f, 0, header_h, w, k_scale, FG_COLOR);
-  
-  int y = header_h + 2 - scroll_y;
+  int y = padding - scroll_y;
   for (int i = 0; i < entry_count; i++) {
-    if (y + char_h < header_h + 2) {
+    if (y + char_h < padding) {
       y += char_h;
       continue;
     }
@@ -218,7 +206,7 @@ static void draw(struct fenster *f) {
       fenster_rect(f, 0, y, w, row_h, bg);
     }
     
-    x = padding;
+    int x = padding;
     draw_text_clipped(f, x, y, e->name, col_name_w - padding, fg);
     x += col_name_w;
     
@@ -244,13 +232,18 @@ static void draw(struct fenster *f) {
   
   fenster_rect(f, 0, h - char_h - padding/2, w, k_scale, FG_COLOR);
   fenster_rect(f, 0, h - char_h - padding/2+k_scale, w, char_h + padding/2 - k_scale, HEADER_COLOR);
-  draw_text_clipped(f, padding, h - char_h, current_path, w - padding*2, FG_COLOR);
+  
+  char count_str[32];
+  snprintf(count_str, sizeof(count_str), "%d items", entry_count > 0 ? entry_count - 1 : 0);
+  int count_w = text_width(count_str);
+  
+  draw_text_clipped(f, padding, h - char_h, current_path, w - padding*3 - count_w, FG_COLOR);
+  draw_text_clipped(f, w - padding - count_w, h - char_h, count_str, count_w, FG_COLOR);
 }
 
 static int y_to_entry(int y) {
-  int header_h = char_h + padding + 2;
-  if (y < header_h) return -1;
-  int idx = (y - header_h + scroll_y) / char_h;
+  if (y < padding) return -1;
+  int idx = (y - padding + scroll_y) / char_h;
   if (idx < 0 || idx >= entry_count) return -1;
   return idx;
 }
@@ -261,10 +254,27 @@ static void clear_selection(void) {
   }
 }
 
+static const char *get_extension(const char *path) {
+  const char *dot = strrchr(path, '.');
+  if (!dot || dot == path) return "";
+  return dot;
+}
+
 static void open_file(const char *path) {
   pid_t pid = fork();
   if (pid == 0) {
     setsid();
+    const char *ext = get_extension(path);
+    if (strcasecmp(ext, ".pdf") == 0) {
+      execlp("mupdf", "mupdf", path, NULL);
+    } else if (strcasecmp(ext, ".png") == 0 || strcasecmp(ext, ".jpg") == 0 || 
+               strcasecmp(ext, ".jpeg") == 0 || strcasecmp(ext, ".gif") == 0) {
+      execlp("feh", "feh", path, NULL);
+    } else if (strcasecmp(ext, ".txt") == 0 || strcasecmp(ext, ".md") == 0) {
+      execlp("knote", "knote", path, NULL);
+    } else if (strcasecmp(ext, ".html") == 0 || strcasecmp(ext, ".svg") == 0) {
+      execlp("surf", "surf", path, NULL);
+    }
     execlp("xdg-open", "xdg-open", path, NULL);
     exit(1);
   }
@@ -338,15 +348,36 @@ static void paste_files(void) {
 }
 
 static int prev_keys[256];
+static int64_t key_press_time[256];
+static int64_t key_repeat_time[256];
+#define KEY_REPEAT_DELAY 300
+#define KEY_REPEAT_RATE 30
+
 static int prev_mouse = 0;
 static int64_t last_click_time = 0;
 static int last_click_entry = -1;
 #define DOUBLE_CLICK_MS 400
 
 static int quit_requested = 0;
+static int window_h = H;
+
+static int max_scroll(void) {
+  int footer_h = char_h + padding / 2 + 1;
+  int visible_h = window_h - padding - footer_h;
+  int content_h = entry_count * char_h;
+  return content_h > visible_h ? content_h - visible_h : 0;
+}
+
+static int visible_rows(void) {
+  int footer_h = char_h + padding / 2 + 1;
+  int visible_h = window_h - padding - footer_h;
+  return visible_h / char_h;
+}
 
 static void handle_key(int k, int mod) {
   int ctrl = mod & 1;
+  int shift = (mod >> 1) & 1;
+  
   if (ctrl && (k == 'Q' || k == 'q')) {
     quit_requested = 1;
   } else if (ctrl && (k == 'C' || k == 'c')) {
@@ -359,6 +390,20 @@ static void handle_key(int k, int mod) {
         entries[i].selected = 1;
       }
     }
+  } else if (shift && k == 17) { /* Up */
+    scroll_y -= char_h;
+    if (scroll_y < 0) scroll_y = 0;
+  } else if (shift && k == 18) { /* Down */
+    scroll_y += char_h;
+    int ms = max_scroll();
+    if (scroll_y > ms) scroll_y = ms;
+  } else if (shift && k == 3) { /* Page Up */
+    scroll_y -= visible_rows() * char_h;
+    if (scroll_y < 0) scroll_y = 0;
+  } else if (shift && k == 4) { /* Page Down */
+    scroll_y += visible_rows() * char_h;
+    int ms = max_scroll();
+    if (scroll_y > ms) scroll_y = ms;
   }
 }
 
@@ -396,6 +441,7 @@ static int run(const char *path) {
     if (f.size_changed) {
       f.size_changed = 0;
       buf = f.buf;
+      window_h = f.height;
     }
     
     if (f.mouse && !prev_mouse) {
@@ -449,9 +495,21 @@ static int run(const char *path) {
     }
     prev_mouse = f.mouse;
     
+    int64_t now_time = fenster_time();
     for (int k = 0; k < 256; k++) {
       if (f.keys[k] && !prev_keys[k]) {
         handle_key(k, f.mod);
+        key_press_time[k] = now_time;
+        key_repeat_time[k] = now_time;
+      } else if (f.keys[k] && prev_keys[k]) {
+        int64_t held = now_time - key_press_time[k];
+        if (held > KEY_REPEAT_DELAY) {
+          int64_t since_repeat = now_time - key_repeat_time[k];
+          if (since_repeat > KEY_REPEAT_RATE) {
+            handle_key(k, f.mod);
+            key_repeat_time[k] = now_time;
+          }
+        }
       }
       prev_keys[k] = f.keys[k];
     }
