@@ -15,13 +15,15 @@
 #include <time.h>
 #endif
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 struct fenster {
   const char *title;
-  const int width;
-  const int height;
+  bool size_changed;
+  int width;
+  int height;
   uint32_t *buf;
   int keys[256]; /* keys are mostly ASCII, but arrows are 17..20 */
   int mod;       /* mod is 4 bits mask, ctrl=1, shift=2, alt=4, meta=8 */
@@ -266,9 +268,7 @@ FENSTER_API int fenster_open(struct fenster *f) {
                              f->height, 0, BlackPixel(f->dpy, screen),
                              WhitePixel(f->dpy, screen));
   f->gc = XCreateGC(f->dpy, f->w, 0, 0);
-  XSelectInput(f->dpy, f->w,
-               ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask |
-                   ButtonReleaseMask | PointerMotionMask);
+  XSelectInput(f->dpy, f->w, StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask);
   XStoreName(f->dpy, f->w, f->title);
   XMapWindow(f->dpy, f->w);
   XSync(f->dpy, f->w);
@@ -284,6 +284,17 @@ FENSTER_API int fenster_loop(struct fenster *f) {
   while (XPending(f->dpy)) {
     XNextEvent(f->dpy, &ev);
     switch (ev.type) {
+    case ConfigureNotify:
+      f->size_changed = true;
+      f->width = ev.xconfigurerequest.width;
+      f->height = ev.xconfigurerequest.height;
+      //free(f->img->data);
+      free(f->img);
+      //XDestroyImage(f->img);
+      f->buf = (uint32_t*)malloc(f->width * f->height * sizeof(uint32_t));
+      f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
+                            (char *)f->buf, f->width, f->height, 32, 0);
+      break;
     case ButtonPress:
     case ButtonRelease:
       f->mouse = (ev.type == ButtonPress);

@@ -1,4 +1,4 @@
-CFLAGS ?= -Wall -Wextra -std=c99
+CFLAGS ?= -Wall -Wextra -std=gnu99
 
 ifeq ($(OS),Windows_NT)
 	LDFLAGS = -lgdi32
@@ -11,22 +11,24 @@ else
 	endif
 endif
 
-all: kterm kbar kwm knote
+all: kterm knote kbar kwm
 
 clean:
 	rm -f kterm kbar kwm knote
 
-kterm: term.c fenster.h
-	$(CC) term.c -o $@ $(CFLAGS) $(LDFLAGS)
+TSM_SRC = tsm/tsm-screen.c tsm/tsm-selection.c tsm/tsm-render.c tsm/tsm-unicode.c tsm/tsm-vte.c tsm/tsm-vte-charsets.c
+
+kterm: term.c fenster.h $(TSM_SRC)
+	$(CC) term.c $(TSM_SRC) -o $@ $(CFLAGS) $(LDFLAGS) -lutil -Itsm
+
+knote: note.c fenster.h
+	$(CC) note.c -o $@ $(CFLAGS) $(LDFLAGS)
 
 kbar: bar.c
 	$(CC) bar.c -o $@ $(CFLAGS) $(LDFLAGS)
 
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
-
-knote: note.c fenster.h
-	$(CC) note.c -o $@ $(CFLAGS) $(LDFLAGS)
 
 install: kwm kbar kterm
 	mkdir -p ~/bin

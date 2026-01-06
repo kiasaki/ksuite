@@ -485,7 +485,40 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine,
   return run(pCmdLine[0] ? pCmdLine : NULL);
 }
 #else
+#include <unistd.h>
 int main(int argc, char **argv) {
-  return run(argc > 1 ? argv[1] : NULL);
+  int detached = 0;
+  const char *file = NULL;
+  
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--detached") == 0) {
+      detached = 1;
+    } else {
+      file = argv[i];
+    }
+  }
+  
+  if (!detached) {
+    pid_t pid = fork();
+    if (pid < 0) {
+      return 1;
+    }
+    if (pid > 0) {
+      return 0;
+    }
+    setsid();
+    freopen("/dev/null", "r", stdin);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
+    char *args[4];
+    args[0] = argv[0];
+    args[1] = "--detached";
+    args[2] = (char *)file;
+    args[3] = NULL;
+    execvp(argv[0], args);
+    return 1;
+  }
+  
+  return run(file);
 }
 #endif
