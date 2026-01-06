@@ -18,16 +18,16 @@
 #include "tsm/libtsm.h"
 #include "tsm/xkbcommon/xkbcommon-keysyms.h"
 
-#define W 600
-#define H 800
+#define W 800
+#define H 1000
 #define BASE_FONT_SCALE 1
-#define BASE_CHAR_W 8
+#define BASE_CHAR_W 9
 #define BASE_CHAR_H 16
 #define BASE_PADDING 2
 
 static int k_scale = 1;
 static int font_scale = 1;
-static int char_w = 8;
+static int char_w = 9;
 static int char_h = 16;
 static int padding = 2;
 
@@ -42,6 +42,11 @@ static struct tsm_screen *screen = NULL;
 static struct tsm_vte *vte = NULL;
 
 static struct fenster *g_fenster = NULL;
+
+/* Mouse selection state */
+static int mouse_pressed = 0;
+static int selection_active = 0;
+static char *clipboard_text = NULL;
 
 static uint32_t palette[TSM_COLOR_NUM] = {
   [TSM_COLOR_BLACK]         = 0x1d1f21,
@@ -64,6 +69,28 @@ static uint32_t palette[TSM_COLOR_NUM] = {
   [TSM_COLOR_BACKGROUND]    = 0xffffff,
 };
 
+/* RGB palette for VTE (r, g, b for each color) */
+static uint8_t vte_palette[TSM_COLOR_NUM][3] = {
+  [TSM_COLOR_BLACK]         = { 0x1d, 0x1f, 0x21 },
+  [TSM_COLOR_RED]           = { 0xcc, 0x66, 0x66 },
+  [TSM_COLOR_GREEN]         = { 0xb5, 0xbd, 0x68 },
+  [TSM_COLOR_YELLOW]        = { 0xf0, 0xc6, 0x74 },
+  [TSM_COLOR_BLUE]          = { 0x81, 0xa2, 0xbe },
+  [TSM_COLOR_MAGENTA]       = { 0xb2, 0x94, 0xbb },
+  [TSM_COLOR_CYAN]          = { 0x8a, 0xbe, 0xb7 },
+  [TSM_COLOR_LIGHT_GREY]    = { 0xc5, 0xc8, 0xc6 },
+  [TSM_COLOR_DARK_GREY]     = { 0x22, 0x22, 0x22 },
+  [TSM_COLOR_LIGHT_RED]     = { 0xcc, 0x66, 0x66 },
+  [TSM_COLOR_LIGHT_GREEN]   = { 0xb5, 0xbd, 0x68 },
+  [TSM_COLOR_LIGHT_YELLOW]  = { 0xf0, 0xc6, 0x74 },
+  [TSM_COLOR_LIGHT_BLUE]    = { 0x81, 0xa2, 0xbe },
+  [TSM_COLOR_LIGHT_MAGENTA] = { 0xb2, 0x94, 0xbb },
+  [TSM_COLOR_LIGHT_CYAN]    = { 0x8a, 0xbe, 0xb7 },
+  [TSM_COLOR_WHITE]         = { 0xff, 0xff, 0xff },
+  [TSM_COLOR_FOREGROUND]    = { 0x22, 0x22, 0x22 },
+  [TSM_COLOR_BACKGROUND]    = { 0xff, 0xff, 0xff },
+};
+
 static void vte_write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *data) {
   (void)vte;
   (void)data;
@@ -72,18 +99,118 @@ static void vte_write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *
   }
 }
 
+static void clipboard_copy(const char *text) {
+  if (!text) return;
+  FILE *p = popen("xclip -selection clipboard", "w");
+  if (p) {
+    fputs(text, p);
+    pclose(p);
+  }
+}
+
+static char *clipboard_paste(void) {
+  FILE *p = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+  if (!p) return NULL;
+
+  char *buf = NULL;
+  size_t len = 0;
+  size_t cap = 0;
+  char tmp[256];
+
+  while (fgets(tmp, sizeof(tmp), p)) {
+    size_t n = strlen(tmp);
+    if (len + n >= cap) {
+      cap = cap ? cap * 2 : 256;
+      buf = realloc(buf, cap);
+    }
+    memcpy(buf + len, tmp, n);
+    len += n;
+  }
+  if (buf) buf[len] = '\0';
+  pclose(p);
+  return buf;
+}
+
+static void pixel_to_cell(struct fenster *f, int px, int py, int *cx, int *cy) {
+  (void)f;
+  *cx = (px - padding) / char_w;
+  *cy = (py - padding) / char_h;
+  if (*cx < 0) *cx = 0;
+  if (*cy < 0) *cy = 0;
+  if (*cx >= cols) *cx = cols - 1;
+  if (*cy >= rows) *cy = rows - 1;
+}
+
+static void handle_mouse(struct fenster *f) {
+  int cx, cy;
+  pixel_to_cell(f, f->x, f->y, &cx, &cy);
+
+  if (f->mouse && !mouse_pressed) {
+    /* Mouse button pressed - start selection */
+    mouse_pressed = 1;
+    selection_active = 1;
+    tsm_screen_selection_reset(screen);
+    tsm_screen_selection_start(screen, cx, cy);
+  } else if (f->mouse && mouse_pressed) {
+    /* Mouse dragging - update selection */
+    tsm_screen_selection_target(screen, cx, cy);
+  } else if (!f->mouse && mouse_pressed) {
+    /* Mouse button released - copy selection */
+    mouse_pressed = 0;
+    if (selection_active) {
+      char *sel = NULL;
+      if (tsm_screen_selection_copy(screen, &sel) >= 0 && sel) {
+        clipboard_copy(sel);
+        free(clipboard_text);
+        clipboard_text = sel;
+      }
+    }
+  }
+}
+
 static uint32_t attr_to_color(const struct tsm_screen_attr *attr, int is_fg) {
   if (is_fg) {
     if (attr->fccode >= 0 && attr->fccode < TSM_COLOR_NUM) {
       return palette[attr->fccode];
+    }
+    /* If RGB is all zero, use default foreground */
+    if (attr->fr == 0 && attr->fg == 0 && attr->fb == 0) {
+      return palette[TSM_COLOR_FOREGROUND];
     }
     return (attr->fr << 16) | (attr->fg << 8) | attr->fb;
   } else {
     if (attr->bccode >= 0 && attr->bccode < TSM_COLOR_NUM) {
       return palette[attr->bccode];
     }
+    /* If RGB is all zero, use default background */
+    if (attr->br == 0 && attr->bg == 0 && attr->bb == 0) {
+      return palette[TSM_COLOR_BACKGROUND];
+    }
     return (attr->br << 16) | (attr->bg << 8) | attr->bb;
   }
+}
+
+static char box_to_ascii(uint32_t c) {
+  if (c >= 0x2500 && c <= 0x257F) {
+    switch (c) {
+      /* Horizontal lines */
+      case 0x2500: case 0x2501: case 0x2504: case 0x2505:
+      case 0x2508: case 0x2509: case 0x254C: case 0x254D:
+      case 0x2574: case 0x2576: case 0x2578: case 0x257A:
+      case 0x257C: case 0x257E:
+        return '-';
+      /* Vertical lines */
+      case 0x2502: case 0x2503: case 0x2506: case 0x2507:
+      case 0x250A: case 0x250B: case 0x254E: case 0x254F:
+      case 0x2575: case 0x2577: case 0x2579: case 0x257B:
+      case 0x257D: case 0x257F:
+        return '|';
+      /* Corners and intersections */
+      default:
+        return '+';
+    }
+  }
+  return 0;
 }
 
 static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch,
@@ -111,9 +238,16 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch,
 
   fenster_rect(f, x, y, char_w, char_h, bg);
 
-  if (len > 0 && ch[0] > 32 && ch[0] < 127) {
-    char tmp[2] = { (char)ch[0], 0 };
-    fenster_text(f, terminus, x, y, tmp, font_scale, fg);
+  if (len > 0) {
+    uint32_t c = ch[0];
+    char ascii = box_to_ascii(c);
+    if (ascii) {
+      char tmp[2] = { ascii, 0 };
+      fenster_text(f, terminus, x, y, tmp, font_scale, fg);
+    } else if (c > 32 && c < 127) {
+      char tmp[2] = { (char)c, 0 };
+      fenster_text(f, terminus, x, y, tmp, font_scale, fg);
+    }
   }
 
   return 0;
@@ -139,6 +273,10 @@ static int spawn_shell(void) {
 }
 
 static int prev_keys[256];
+static int64_t key_press_time[256];
+static int64_t key_repeat_time[256];
+#define KEY_REPEAT_DELAY 400
+#define KEY_REPEAT_RATE 30
 
 static uint32_t fenster_key_to_xkb(int k, int shift) {
   switch (k) {
@@ -202,25 +340,69 @@ static uint32_t get_unicode(int k, int shift) {
   return 0;
 }
 
+static void handle_key(int k, int mod) {
+  int ctrl = mod & 1;
+  int shift = mod & 2;
+
+  if (ctrl && (k == 'Q' || k == 'q')) {
+    quit_requested = 1;
+    return;
+  }
+
+  /* Paste with Ctrl+Shift+V */
+  if (ctrl && shift && (k == 'V' || k == 'v')) {
+    char *paste = clipboard_paste();
+    if (paste) {
+      write(master_fd, paste, strlen(paste));
+      free(paste);
+    }
+    return;
+  }
+
+  /* Scrollback navigation with shift+arrows */
+  if (shift && k == 17) { /* Up */
+    tsm_screen_sb_up(screen, 1);
+    return;
+  }
+  if (shift && k == 18) { /* Down */
+    tsm_screen_sb_down(screen, 1);
+    return;
+  }
+  if (shift && k == 3) { /* Page Up */
+    tsm_screen_sb_page_up(screen, 1);
+    return;
+  }
+  if (shift && k == 4) { /* Page Down */
+    tsm_screen_sb_page_down(screen, 1);
+    return;
+  }
+
+  uint32_t keysym = fenster_key_to_xkb(k, shift);
+  uint32_t unicode = get_unicode(k, shift);
+  unsigned int mods = 0;
+
+  if (ctrl) mods |= TSM_CONTROL_MASK;
+  if (shift) mods |= TSM_SHIFT_MASK;
+
+  tsm_vte_handle_keyboard(vte, keysym, keysym, mods, unicode);
+}
+
 static void handle_keyboard(struct fenster *f) {
+  int64_t now_time = fenster_time();
   for (int k = 0; k < 256; k++) {
     if (f->keys[k] && !prev_keys[k]) {
-      int ctrl = f->mod & 1;
-      int shift = f->mod & 2;
-
-      if (ctrl && (k == 'Q' || k == 'q')) {
-        quit_requested = 1;
-        break;
+      handle_key(k, f->mod);
+      key_press_time[k] = now_time;
+      key_repeat_time[k] = now_time;
+    } else if (f->keys[k] && prev_keys[k]) {
+      int64_t held = now_time - key_press_time[k];
+      if (held > KEY_REPEAT_DELAY) {
+        int64_t since_repeat = now_time - key_repeat_time[k];
+        if (since_repeat > KEY_REPEAT_RATE) {
+          handle_key(k, f->mod);
+          key_repeat_time[k] = now_time;
+        }
       }
-
-      uint32_t keysym = fenster_key_to_xkb(k, shift);
-      uint32_t unicode = get_unicode(k, shift);
-      unsigned int mods = 0;
-
-      if (ctrl) mods |= TSM_CONTROL_MASK;
-      if (shift) mods |= TSM_SHIFT_MASK;
-
-      tsm_vte_handle_keyboard(vte, keysym, keysym, mods, unicode);
     }
     prev_keys[k] = f->keys[k];
   }
@@ -244,6 +426,7 @@ static void handle_resize(struct fenster *f) {
 static void draw(struct fenster *f) {
   int w = f->width;
   int h = f->height;
+
   for (int i = 0; i < w * h; i++) f->buf[i] = default_bg;
 
   g_fenster = f;
@@ -272,6 +455,14 @@ static int run(void) {
     fprintf(stderr, "Failed to create TSM screen\n");
     return 1;
   }
+
+  /* Set default attributes to use our foreground/background colors */
+  struct tsm_screen_attr def_attr = {
+    .fccode = TSM_COLOR_FOREGROUND,
+    .bccode = TSM_COLOR_BACKGROUND,
+  };
+  tsm_screen_set_def_attr(screen, &def_attr);
+
   tsm_screen_resize(screen, cols, rows);
   tsm_screen_set_max_sb(screen, 5000);
 
@@ -281,6 +472,8 @@ static int run(void) {
     tsm_screen_unref(screen);
     return 1;
   }
+  tsm_vte_set_custom_palette(vte, vte_palette);
+  tsm_vte_set_palette(vte, "custom");
   tsm_vte_set_backspace_sends_delete(vte, true);
 
   if (spawn_shell() < 0) {
@@ -304,6 +497,7 @@ static int run(void) {
     }
 
     handle_resize(&f);
+    handle_mouse(&f);
     handle_keyboard(&f);
     draw(&f);
 
@@ -316,6 +510,7 @@ static int run(void) {
 
   if (child_pid > 0) { kill(child_pid, SIGHUP); waitpid(child_pid, NULL, 0); }
   if (master_fd >= 0) close(master_fd);
+  free(clipboard_text);
   tsm_vte_unref(vte);
   tsm_screen_unref(screen);
   fenster_close(&f);
@@ -328,5 +523,35 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine,
   return run();
 }
 #else
-int main(void) { return run(); }
+int main(int argc, char **argv) {
+  int detached = 0;
+  
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--detached") == 0) {
+      detached = 1;
+    }
+  }
+  
+  if (!detached) {
+    pid_t pid = fork();
+    if (pid < 0) {
+      return 1;
+    }
+    if (pid > 0) {
+      return 0;
+    }
+    setsid();
+    freopen("/dev/null", "r", stdin);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
+    char *args[3];
+    args[0] = argv[0];
+    args[1] = "--detached";
+    args[2] = NULL;
+    execvp(argv[0], args);
+    return 1;
+  }
+  
+  return run();
+}
 #endif

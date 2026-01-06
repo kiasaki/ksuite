@@ -30,9 +30,40 @@ static int cursor_col = 0;
 static int sel_start_line = -1, sel_start_col = -1;
 static int sel_end_line = -1, sel_end_col = -1;
 static int selecting = 0;
-static char *clipboard = NULL;
 static char *filename = NULL;
 static int scroll_y = 0;
+
+static void clipboard_copy(const char *text) {
+  if (!text) return;
+  FILE *p = popen("xclip -selection clipboard", "w");
+  if (p) {
+    fputs(text, p);
+    pclose(p);
+  }
+}
+
+static char *clipboard_paste(void) {
+  FILE *p = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+  if (!p) return NULL;
+
+  char *buf = NULL;
+  size_t len = 0;
+  size_t cap = 0;
+  char tmp[256];
+
+  while (fgets(tmp, sizeof(tmp), p)) {
+    size_t n = strlen(tmp);
+    if (len + n >= cap) {
+      cap = cap ? cap * 2 : 256;
+      buf = realloc(buf, cap);
+    }
+    memcpy(buf + len, tmp, n);
+    len += n;
+  }
+  if (buf) buf[len] = '\0';
+  pclose(p);
+  return buf;
+}
 
 static int char_width(char c) {
   return font[(unsigned char)c] * font_scale;
@@ -323,10 +354,13 @@ static void handle_key(int k, int mod) {
   } else if (ctrl && (k == 'S' || k == 's')) {
     save_file();
   } else if (ctrl && (k == 'C' || k == 'c')) {
-    if (clipboard) free(clipboard);
-    clipboard = get_selection_text();
+    char *sel = get_selection_text();
+    clipboard_copy(sel);
+    free(sel);
   } else if (ctrl && (k == 'V' || k == 'v')) {
-    paste_text(clipboard);
+    char *text = clipboard_paste();
+    paste_text(text);
+    free(text);
   } else if (ctrl && (k == 'A' || k == 'a')) {
     sel_start_line = 0;
     sel_start_col = 0;

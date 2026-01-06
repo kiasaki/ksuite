@@ -268,7 +268,7 @@ FENSTER_API int fenster_open(struct fenster *f) {
                              f->height, 0, BlackPixel(f->dpy, screen),
                              WhitePixel(f->dpy, screen));
   f->gc = XCreateGC(f->dpy, f->w, 0, 0);
-  XSelectInput(f->dpy, f->w, StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask);
+  XSelectInput(f->dpy, f->w, StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | FocusChangeMask);
   XStoreName(f->dpy, f->w, f->title);
   XMapWindow(f->dpy, f->w);
   XSync(f->dpy, f->w);
@@ -286,8 +286,8 @@ FENSTER_API int fenster_loop(struct fenster *f) {
     switch (ev.type) {
     case ConfigureNotify:
       f->size_changed = true;
-      f->width = ev.xconfigurerequest.width;
-      f->height = ev.xconfigurerequest.height;
+      f->width = ev.xconfigure.width;
+      f->height = ev.xconfigure.height;
       //free(f->img->data);
       free(f->img);
       //XDestroyImage(f->img);
@@ -315,6 +315,11 @@ FENSTER_API int fenster_loop(struct fenster *f) {
       f->mod = (!!(m & ControlMask)) | (!!(m & ShiftMask) << 1) |
                (!!(m & Mod1Mask) << 2) | (!!(m & Mod4Mask) << 3);
     } break;
+    case FocusOut:
+      for (int i = 0; i < 256; i++) f->keys[i] = 0;
+      f->mod = 0;
+      f->mouse = 0;
+      break;
     }
   }
   return 0;

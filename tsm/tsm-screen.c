@@ -959,6 +959,7 @@ void tsm_screen_set_def_attr(struct tsm_screen *con,
 	if (!con || !attr)
 		return;
 	memcpy(&con->def_attr, attr, sizeof(*attr));
+	memcpy(&con->def_attr_main, attr, sizeof(*attr));
 }
 
 SHL_EXPORT

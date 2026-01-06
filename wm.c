@@ -18,7 +18,8 @@ static Atom wm_name;
 static Atom net_wm_name;
 static Atom utf8_string;
 
-static const char *ct[]  = {"st", NULL};
+static const char *cr[]  = {"st", NULL};
+static const char *ct[]  = {"kterm", NULL};
 static const char *cw[]  = {"kweb", NULL};
 static const char *cs[]  = {"dmenu_run", NULL};
 static const char *cy[] = {"amixer", "-q", "set", "Master", "toggle", NULL};
@@ -34,6 +35,7 @@ static const char *cp[] = {"bri", "+", NULL};
   x("Tab", focus_next()) \
   x("q", kill_window()) \
   x("m", maximize_window()) \
+  x("r", start(cr)) \
   x("t", start(ct)) \
   x("w", start(cw)) \
   x("space", start(cs)) \

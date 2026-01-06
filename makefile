@@ -11,10 +11,10 @@ else
 	endif
 endif
 
-all: kterm knote kbar kwm
+all: kterm knote kbar kwm kfile
 
 clean:
-	rm -f kterm kbar kwm knote
+	rm -f kterm kbar kwm knote kfile
 
 TSM_SRC = tsm/tsm-screen.c tsm/tsm-selection.c tsm/tsm-render.c tsm/tsm-unicode.c tsm/tsm-vte.c tsm/tsm-vte-charsets.c
 
@@ -24,15 +24,21 @@ kterm: term.c fenster.h $(TSM_SRC)
 knote: note.c fenster.h
 	$(CC) note.c -o $@ $(CFLAGS) $(LDFLAGS)
 
+kfile: file.c fenster.h
+	$(CC) file.c -o $@ $(CFLAGS) $(LDFLAGS) -lrt
+
 kbar: bar.c
 	$(CC) bar.c -o $@ $(CFLAGS) $(LDFLAGS)
 
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
 
-install: kwm kbar kterm
+install: kwm kbar kterm knote kfile
 	mkdir -p ~/bin
 	install -m 755 kbar ~/bin/
+	install -m 755 kterm ~/bin/
+	install -m 755 knote ~/bin/
+	install -m 755 kfile ~/bin/
 	sudo install -m 755 kwm /usr/bin/
 
 fonts:
