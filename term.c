@@ -36,6 +36,7 @@ static uint32_t default_bg = 0xffffff;
 static int master_fd = -1;
 static pid_t child_pid = -1;
 static int quit_requested = 0;
+static int needs_redraw = 1;
 static int cols = 80, rows = 24;
 
 static struct tsm_screen *screen = NULL;
@@ -151,9 +152,11 @@ static void handle_mouse(struct fenster *f) {
     selection_active = 1;
     tsm_screen_selection_reset(screen);
     tsm_screen_selection_start(screen, cx, cy);
+    needs_redraw = 1;
   } else if (f->mouse && mouse_pressed) {
     /* Mouse dragging - update selection */
     tsm_screen_selection_target(screen, cx, cy);
+    needs_redraw = 1;
   } else if (!f->mouse && mouse_pressed) {
     /* Mouse button released - copy selection */
     mouse_pressed = 0;
@@ -403,6 +406,7 @@ static void handle_keyboard(struct fenster *f) {
       handle_key(k, f->mod);
       key_press_time[k] = now_time;
       key_repeat_time[k] = now_time;
+      needs_redraw = 1;
     } else if (f->keys[k] && prev_keys[k]) {
       int64_t held = now_time - key_press_time[k];
       if (held > KEY_REPEAT_DELAY) {
@@ -410,6 +414,7 @@ static void handle_keyboard(struct fenster *f) {
         if (since_repeat > KEY_REPEAT_RATE) {
           handle_key(k, f->mod);
           key_repeat_time[k] = now_time;
+          needs_redraw = 1;
         }
       }
     }
@@ -429,6 +434,7 @@ static void handle_resize(struct fenster *f) {
 
     struct winsize ws = { .ws_row = rows, .ws_col = cols };
     ioctl(master_fd, TIOCSWINSZ, &ws);
+    needs_redraw = 1;
   }
 }
 
@@ -492,29 +498,33 @@ static int run(void) {
   }
 
   fenster_open(&f);
-  int64_t now = fenster_time();
 
   while (fenster_loop(&f) == 0 && !quit_requested) {
-    char rd[4096];
-    ssize_t n;
-    while ((n = read(master_fd, rd, sizeof(rd))) > 0) {
-      tsm_vte_input(vte, rd, n);
-    }
-    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-      int status;
-      if (waitpid(child_pid, &status, WNOHANG) != 0) break;
+    fd_set fds;
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 16000 }; /* ~60 FPS */
+    FD_ZERO(&fds);
+    FD_SET(master_fd, &fds);
+
+    if (select(master_fd + 1, &fds, NULL, NULL, &tv) > 0) {
+      char rd[4096];
+      ssize_t n;
+      while ((n = read(master_fd, rd, sizeof(rd))) > 0) {
+        tsm_vte_input(vte, rd, n);
+        needs_redraw = 1;
+      }
+      if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        int status;
+        if (waitpid(child_pid, &status, WNOHANG) != 0) break;
+      }
     }
 
     handle_resize(&f);
     handle_mouse(&f);
     handle_keyboard(&f);
-    draw(&f);
-
-    int64_t time = fenster_time();
-    if (time - now < 1000 / 60) {
-      fenster_sleep(1000 / 60 - (time - now));
+    if (needs_redraw) {
+      draw(&f);
+      needs_redraw = 0;
     }
-    now = time;
   }
 
   if (child_pid > 0) { kill(child_pid, SIGHUP); waitpid(child_pid, NULL, 0); }
