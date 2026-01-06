@@ -17,22 +17,32 @@
 
 #include "chicago12.h"
 
-/* Bar configuration */
-#define BAR_HEIGHT 56
-#define TAB_PADDING 4
-#define TAB_MAX_WIDTH 240
-#define TAB_MIN_WIDTH 80
-#define TIME_WIDTH 100
-#define TEXT_SCALE 2
+/* Base dimensions (unscaled) */
+#define BASE_BAR_HEIGHT 24
+#define BASE_PADDING 8
+#define BASE_PADDING_TIGHT 4
+#define BASE_TAB_MAX_WIDTH 150
+#define BASE_TAB_MIN_WIDTH 75
+#define BASE_TIME_WIDTH 70
+#define BASE_BORDER 1
+
+/* Scaled dimensions (computed at runtime) */
+static int k_scale = 1;
+static int bar_height;
+static int padding;
+static int padding_tight;
+static int tab_max_width;
+static int tab_min_width;
+static int time_width;
+static int border_width;
+static int text_scale;
 
 /* Colors */
-#define COLOR_BG       0xffffff
-#define COLOR_TAB      0xeeeeee
-#define COLOR_TAB_SEL  0xcccccc
-#define COLOR_TAB_ICON 0xdddddd
-#define COLOR_TEXT     0x000000
-#define COLOR_TIME_BG  0xeeeeee
-#define COLOR_BORDER   0x000000
+#define COLOR_BG         0xffffff
+#define COLOR_TEXT       0x000000
+#define COLOR_TEXT_INV   0xffffff
+#define COLOR_ACTIVE_BG  0x000000
+#define COLOR_BORDER     0x000000
 
 /* Max windows to track */
 #define MAX_WINDOWS 64
@@ -69,7 +79,7 @@ static void bar_rect(int x, int y, int w, int h, uint32_t c) {
         for (int col = 0; col < w; col++) {
             int px = x + col;
             int py = y + row;
-            if (px >= 0 && px < screen_width && py >= 0 && py < BAR_HEIGHT) {
+            if (px >= 0 && px < screen_width && py >= 0 && py < bar_height) {
                 buf[py * screen_width + px] = c;
             }
         }
@@ -253,66 +263,51 @@ static void draw_bar(void) {
     snprintf(time_str, sizeof(time_str), "%02d:%02d", tm->tm_hour, tm->tm_min);
 
     /* Clear background */
-    bar_rect(0, 0, screen_width, BAR_HEIGHT, COLOR_BG);
+    bar_rect(0, 0, screen_width, bar_height, COLOR_BG);
 
     /* Draw top border */
-    bar_rect(0, 0, screen_width, 1, COLOR_BORDER);
+    bar_rect(0, 0, screen_width, border_width, COLOR_BORDER);
 
     /* Calculate tab width */
-    int tabs_area = screen_width - TIME_WIDTH - TAB_PADDING;
-    int tab_width = TAB_MAX_WIDTH;
+    int tabs_area = screen_width - time_width - padding;
+    int tab_width = tab_max_width;
 
     if (num_windows > 0) {
-        tab_width = (tabs_area - TAB_PADDING) / num_windows - TAB_PADDING;
-        if (tab_width > TAB_MAX_WIDTH) tab_width = TAB_MAX_WIDTH;
-        if (tab_width < TAB_MIN_WIDTH) tab_width = TAB_MIN_WIDTH;
+        tab_width = (tabs_area - padding) / num_windows;
+        if (tab_width > tab_max_width) tab_width = tab_max_width;
+        if (tab_width < tab_min_width) tab_width = tab_min_width;
     }
 
     /* Draw tabs */
-    int tab_x = TAB_PADDING;
+    int tab_x = padding;
     unsigned char *font = chicago;
+    int text_y = (bar_height - 16 * text_scale) / 2;
 
     for (int i = 0; i < num_windows; i++) {
         if (tab_x + tab_width > tabs_area) break;
 
-        /* Tab background */
-        uint32_t tab_color = windows[i].active ? COLOR_TAB_SEL :
-                             windows[i].iconified ? COLOR_TAB_ICON : COLOR_TAB;
-        bar_rect(tab_x, TAB_PADDING, tab_width, BAR_HEIGHT - TAB_PADDING * 2, tab_color);
-
-        /* Tab border */
-        bar_rect(tab_x, TAB_PADDING, tab_width, 1, COLOR_BORDER);
-        bar_rect(tab_x, BAR_HEIGHT - TAB_PADDING - 1, tab_width, 1, COLOR_BORDER);
-        bar_rect(tab_x, TAB_PADDING, 1, BAR_HEIGHT - TAB_PADDING * 2, COLOR_BORDER);
-        bar_rect(tab_x + tab_width - 1, TAB_PADDING, 1, BAR_HEIGHT - TAB_PADDING * 2, COLOR_BORDER);
-
-        /* Tab title */
         char truncated[256];
-        truncate_title(truncated, windows[i].title, tab_width - TAB_PADDING * 2, font, TEXT_SCALE);
-        int text_y = (BAR_HEIGHT - 16 * TEXT_SCALE) / 2;
-        bar_text(font, tab_x + TAB_PADDING, text_y, truncated, TEXT_SCALE, COLOR_TEXT);
+        truncate_title(truncated, windows[i].title, tab_width - padding * 2, font, text_scale);
 
-        tab_x += tab_width + TAB_PADDING;
+        if (windows[i].active) {
+            /* Active: black background, white text, full height */
+            bar_rect(tab_x, border_width, tab_width, bar_height - border_width, COLOR_ACTIVE_BG);
+            bar_text(font, tab_x + padding, text_y, truncated, text_scale, COLOR_TEXT_INV);
+        } else {
+            /* Inactive: just text on white background */
+            bar_text(font, tab_x + padding, text_y, truncated, text_scale, COLOR_TEXT);
+        }
+
+        tab_x += tab_width;
     }
 
-    /* Draw time area */
-    int time_x = screen_width - TIME_WIDTH;
-    bar_rect(time_x, TAB_PADDING, TIME_WIDTH - TAB_PADDING, BAR_HEIGHT - TAB_PADDING * 2, COLOR_TIME_BG);
-
-    /* Time border */
-    bar_rect(time_x, TAB_PADDING, TIME_WIDTH - TAB_PADDING, 1, COLOR_BORDER);
-    bar_rect(time_x, BAR_HEIGHT - TAB_PADDING - 1, TIME_WIDTH - TAB_PADDING, 1, COLOR_BORDER);
-    bar_rect(time_x, TAB_PADDING, 1, BAR_HEIGHT - TAB_PADDING * 2, COLOR_BORDER);
-    bar_rect(screen_width - TAB_PADDING - 1, TAB_PADDING, 1, BAR_HEIGHT - TAB_PADDING * 2, COLOR_BORDER);
-
-    /* Draw time */
-    int time_text_w = text_width(font, time_str, TEXT_SCALE);
-    int time_text_x = time_x + (TIME_WIDTH - time_text_w) / 2;
-    int time_text_y = (BAR_HEIGHT - 16 * TEXT_SCALE) / 2;
-    bar_text(font, time_text_x, time_text_y, time_str, TEXT_SCALE, COLOR_TEXT);
+    /* Draw time (no background, just text) */
+    int time_text_w = text_width(font, time_str, text_scale);
+    int time_text_x = screen_width - time_text_w - padding;
+    bar_text(font, time_text_x, text_y, time_str, text_scale, COLOR_TEXT);
 
     /* Update display */
-    XPutImage(dpy, bar_win, gc, img, 0, 0, 0, 0, screen_width, BAR_HEIGHT);
+    XPutImage(dpy, bar_win, gc, img, 0, 0, 0, 0, screen_width, bar_height);
     XFlush(dpy);
 }
 
@@ -353,7 +348,7 @@ static void activate_window(Window win) {
         needs_move = 1;
     }
     /* Window completely off bottom edge */
-    if (attrs.y >= screen_height - BAR_HEIGHT) {
+    if (attrs.y >= screen_height - bar_height) {
         new_y = 100;
         needs_move = 1;
     }
@@ -366,7 +361,7 @@ static void activate_window(Window win) {
     /* Window too small to see (some popups are 1x1 or 0x0) */
     if (attrs.width < 100 || attrs.height < 100) {
         new_w = screen_width / 2;
-        new_h = (screen_height - BAR_HEIGHT) / 2;
+        new_h = (screen_height - bar_height) / 2;
         new_x = screen_width / 4;
         new_y = 100;
         needs_resize = 1;
@@ -390,16 +385,16 @@ static void activate_window(Window win) {
 /* Handle click on bar */
 static void handle_click(int x) {
     /* Calculate which tab was clicked */
-    int tabs_area = screen_width - TIME_WIDTH - TAB_PADDING;
-    int tab_width = TAB_MAX_WIDTH;
+    int tabs_area = screen_width - time_width - padding;
+    int tab_width = tab_max_width;
 
     if (num_windows > 0) {
-        tab_width = (tabs_area - TAB_PADDING) / num_windows - TAB_PADDING;
-        if (tab_width > TAB_MAX_WIDTH) tab_width = TAB_MAX_WIDTH;
-        if (tab_width < TAB_MIN_WIDTH) tab_width = TAB_MIN_WIDTH;
+        tab_width = (tabs_area - padding) / num_windows;
+        if (tab_width > tab_max_width) tab_width = tab_max_width;
+        if (tab_width < tab_min_width) tab_width = tab_min_width;
     }
 
-    int tab_x = TAB_PADDING;
+    int tab_x = padding;
     for (int i = 0; i < num_windows; i++) {
         if (tab_x + tab_width > tabs_area) break;
 
@@ -412,11 +407,34 @@ static void handle_click(int x) {
             break;
         }
 
-        tab_x += tab_width + TAB_PADDING;
+        tab_x += tab_width;
     }
 }
 
+int64_t get_time() {
+  struct timespec time;
+  clock_gettime(CLOCK_REALTIME, &time);
+  return time.tv_sec * 1000 + (time.tv_nsec / 1000000);
+}
+
 int main(void) {
+    /* Read K_SCALE from environment (default 1) */
+    char *scale_env = getenv("K_SCALE");
+    if (scale_env) {
+        k_scale = atoi(scale_env);
+        if (k_scale < 1) k_scale = 1;
+    }
+
+    /* Initialize scaled dimensions */
+    bar_height = BASE_BAR_HEIGHT * k_scale;
+    padding = BASE_PADDING * k_scale;
+    padding_tight = BASE_PADDING_TIGHT * k_scale;
+    tab_max_width = BASE_TAB_MAX_WIDTH * k_scale;
+    tab_min_width = BASE_TAB_MIN_WIDTH * k_scale;
+    time_width = BASE_TIME_WIDTH * k_scale;
+    border_width = BASE_BORDER * k_scale;
+    text_scale = k_scale;
+
     /* Open display */
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -430,13 +448,13 @@ int main(void) {
     int screen = DefaultScreen(dpy);
     screen_width = DisplayWidth(dpy, screen);
     screen_height = DisplayHeight(dpy, screen);
-    bar_y = screen_height - BAR_HEIGHT;
+    bar_y = screen_height - bar_height;
 
     /* Initialize atoms */
     init_atoms();
 
     /* Allocate buffer */
-    buf = malloc(screen_width * BAR_HEIGHT * sizeof(uint32_t));
+    buf = malloc(screen_width * bar_height * sizeof(uint32_t));
     if (!buf) {
         fprintf(stderr, "Cannot allocate buffer\n");
         XCloseDisplay(dpy);
@@ -449,14 +467,14 @@ int main(void) {
     attrs.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask;
 
     bar_win = XCreateWindow(dpy, DefaultRootWindow(dpy),
-                            0, bar_y, screen_width, BAR_HEIGHT,
+                            0, bar_y, screen_width, bar_height,
                             0, CopyFromParent, InputOutput, CopyFromParent,
                             CWOverrideRedirect | CWEventMask, &attrs);
 
     /* Create GC and image */
     gc = XCreateGC(dpy, bar_win, 0, NULL);
     img = XCreateImage(dpy, DefaultVisual(dpy, screen), 24, ZPixmap, 0,
-                       (char *)buf, screen_width, BAR_HEIGHT, 32, 0);
+                       (char *)buf, screen_width, bar_height, 32, 0);
 
     /* Map window */
     XMapWindow(dpy, bar_win);
@@ -468,7 +486,7 @@ int main(void) {
 
     /* Main loop */
     XEvent ev;
-    time_t last_time = 0;
+    int64_t last_time = 0;
 
     while (1) {
         /* Check for events with timeout */
@@ -489,8 +507,8 @@ int main(void) {
         }
 
         /* Update time every second and keep bar on top */
-        time_t now = time(NULL);
-        if (now != last_time) {
+        int64_t now = get_time();
+        if (now > last_time + 100) {
             last_time = now;
             XRaiseWindow(dpy, bar_win);
             update_windows();

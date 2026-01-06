@@ -11,11 +11,25 @@ else
 	endif
 endif
 
-term: term.c fenster.h
+all: kterm kbar kwm
+
+clean:
+	rm -f kterm kbar kwm
+
+kterm: term.c fenster.h
 	$(CC) term.c -o $@ $(CFLAGS) $(LDFLAGS)
 
-bar: bar.c
+kbar: bar.c
 	$(CC) bar.c -o $@ $(CFLAGS) $(LDFLAGS)
+
+kwm: wm.c
+	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
+
+install: wm bar term
+	mkdir -p ~/bin
+	cp kbar ~/bin/kbar
+	#cp kterm ~/bin/kterm
+	sudo cp kwm /usr/bin/kwm
 
 fonts:
 	xxd -i fonts/newyork14.uf2 > newyork14.h

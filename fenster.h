@@ -386,9 +386,9 @@ void draw_icn(struct fenster *f, char *sprite, int x, int y, int scale, uint32_t
 static void fenster_text(struct fenster *f, unsigned char *font, int x, int y, char *s, int scale, uint32_t c) {
   while (*s) {
     char chr = *s++;
-    int size = font[chr];
+    int size = (int)font[chr];
     if (chr > 32) {
-      char *sprite = &font[chr*8*4 + 256];
+      char *sprite = (char*)&font[chr*8*4 + 256];
       draw_icn(f, sprite, x, y, scale, c);
       draw_icn(f, sprite+8, x, y+8*scale, scale, c);
       if (size > 8) {
