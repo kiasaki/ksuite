@@ -25,11 +25,10 @@ kbar: bar.c
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
 
-install: wm bar term
+install: kwm kbar kterm
 	mkdir -p ~/bin
-	cp kbar ~/bin/kbar
-	#cp kterm ~/bin/kterm
-	sudo cp kwm /usr/bin/kwm
+	install -m 755 kbar ~/bin/
+	sudo install -m 755 kwm /usr/bin/
 
 fonts:
 	xxd -i fonts/newyork14.uf2 > newyork14.h

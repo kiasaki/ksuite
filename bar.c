@@ -1,7 +1,7 @@
 /*
  * bar.c - X11 taskbar/toolbar
  * Shows open windows as tabs and time on the right
- * Compile: gcc -o bar bar.c -lX11
+ * Compile: gcc -o kbar bar.c -lX11
  */
 
 #define _DEFAULT_SOURCE 1
@@ -73,7 +73,7 @@ static Atom net_wm_name;
 static Atom utf8_string;
 static Atom wm_state;
 
-/* Drawing primitives from fenster */
+/* Drawing primitives */
 static void bar_rect(int x, int y, int w, int h, uint32_t c) {
     for (int row = 0; row < h; row++) {
         for (int col = 0; col < w; col++) {
@@ -145,6 +145,35 @@ static int get_wm_state(Window win) {
         XFree(prop);
     }
     return state;
+}
+
+/* Get root window name (for status text) */
+static void get_root_name(char *name, size_t maxlen) {
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *prop = NULL;
+
+    name[0] = '\0';
+
+    Window root = DefaultRootWindow(dpy);
+
+    if (XGetWindowProperty(dpy, root, net_wm_name, 0, 256, False, utf8_string,
+                           &actual_type, &actual_format, &nitems, &bytes_after,
+                           &prop) == Success && prop) {
+        strncpy(name, (char *)prop, maxlen - 1);
+        name[maxlen - 1] = '\0';
+        XFree(prop);
+        return;
+    }
+
+    if (XGetWindowProperty(dpy, root, wm_name, 0, 256, False, XA_STRING,
+                           &actual_type, &actual_format, &nitems, &bytes_after,
+                           &prop) == Success && prop) {
+        strncpy(name, (char *)prop, maxlen - 1);
+        name[maxlen - 1] = '\0';
+        XFree(prop);
+    }
 }
 
 /* Get window title */
@@ -256,11 +285,14 @@ static void truncate_title(char *dest, const char *src, int max_width, unsigned 
 
 /* Draw the bar */
 static void draw_bar(void) {
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    char time_str[16];
+    char status_str[256];
 
-    snprintf(time_str, sizeof(time_str), "%02d:%02d", tm->tm_hour, tm->tm_min);
+    get_root_name(status_str, sizeof(status_str));
+    if (status_str[0] == '\0') {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        snprintf(status_str, sizeof(status_str), "%02d:%02d", tm->tm_hour, tm->tm_min);
+    }
 
     /* Clear background */
     bar_rect(0, 0, screen_width, bar_height, COLOR_BG);
@@ -301,10 +333,10 @@ static void draw_bar(void) {
         tab_x += tab_width;
     }
 
-    /* Draw time (no background, just text) */
-    int time_text_w = text_width(font, time_str, text_scale);
-    int time_text_x = screen_width - time_text_w - padding;
-    bar_text(font, time_text_x, text_y, time_str, text_scale, COLOR_TEXT);
+    /* Draw status (root window name or time) */
+    int status_text_w = text_width(font, status_str, text_scale);
+    int status_text_x = screen_width - status_text_w - padding;
+    bar_text(font, status_text_x, text_y, status_str, text_scale, COLOR_TEXT);
 
     /* Update display */
     XPutImage(dpy, bar_win, gc, img, 0, 0, 0, 0, screen_width, bar_height);
@@ -476,6 +508,12 @@ int main(void) {
     img = XCreateImage(dpy, DefaultVisual(dpy, screen), 24, ZPixmap, 0,
                        (char *)buf, screen_width, bar_height, 32, 0);
 
+    /* Subscribe to root window events for screen size changes */
+    XSelectInput(dpy, DefaultRootWindow(dpy), StructureNotifyMask);
+
+    /* Ensure bar window receives ConfigureNotify to prevent moving */
+    XSelectInput(dpy, bar_win, ExposureMask | ButtonPressMask | StructureNotifyMask);
+
     /* Map window */
     XMapWindow(dpy, bar_win);
     XRaiseWindow(dpy, bar_win);
@@ -503,6 +541,33 @@ int main(void) {
                     handle_click(ev.xbutton.x);
                 }
                 break;
+
+            case ConfigureNotify:
+                if (ev.xconfigure.window == bar_win) {
+                    if (ev.xconfigure.x != 0 || ev.xconfigure.y != bar_y) {
+                        XMoveWindow(dpy, bar_win, 0, bar_y);
+                    }
+                } else if (ev.xconfigure.window == DefaultRootWindow(dpy)) {
+                    int new_width = ev.xconfigure.width;
+                    int new_height = ev.xconfigure.height;
+                    if (new_width != screen_width || new_height != screen_height) {
+                        screen_width = new_width;
+                        screen_height = new_height;
+                        bar_y = screen_height - bar_height;
+
+                        img->data = NULL;
+                        XDestroyImage(img);
+                        free(buf);
+
+                        buf = malloc(screen_width * bar_height * sizeof(uint32_t));
+                        img = XCreateImage(dpy, DefaultVisual(dpy, DefaultScreen(dpy)), 24, ZPixmap, 0,
+                                           (char *)buf, screen_width, bar_height, 32, 0);
+
+                        XMoveResizeWindow(dpy, bar_win, 0, bar_y, screen_width, bar_height);
+                        draw_bar();
+                    }
+                }
+                break;
             }
         }
 
@@ -510,6 +575,15 @@ int main(void) {
         int64_t now = get_time();
         if (now > last_time + 100) {
             last_time = now;
+
+            /* Ensure bar stays in correct position */
+            //XWindowAttributes attrs;
+            //if (XGetWindowAttributes(dpy, bar_win, &attrs)) {
+            //    if (attrs.x != 0 || attrs.y != bar_y) {
+            //        XMoveWindow(dpy, bar_win, 0, bar_y);
+            //    }
+            //}
+
             XRaiseWindow(dpy, bar_win);
             update_windows();
             draw_bar();

@@ -202,6 +202,9 @@ int main() {
     case ButtonPress:
         if (ev.xbutton.subwindow != None) {
           XGetWindowAttributes(dpy, ev.xbutton.subwindow, &attr);
+          if (attr.override_redirect) {
+            break;
+          }
           drag_start_x = ev.xbutton.x_root;
           drag_start_y = ev.xbutton.y_root;
           win_start_x = attr.x;
