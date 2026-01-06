@@ -332,8 +332,8 @@ FENSTER_API int64_t fenster_time(void) {
 }
 #endif
 
-static void fenster_line(struct fenster *f, int x0, int y0, int x1, int y1,
-                         uint32_t c) {
+/*
+static void fenster_line(struct fenster *f, int x0, int y0, int x1, int y1, uint32_t c) {
   int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
   int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
   int err = (dx > dy ? dx : -dy) / 2, e2;
@@ -353,6 +353,7 @@ static void fenster_line(struct fenster *f, int x0, int y0, int x1, int y1,
     }
   }
 }
+*/
 
 static void fenster_rect(struct fenster *f, int x, int y, int w, int h, uint32_t c) {
   for (int row = 0; row < h; row++) {
@@ -363,6 +364,7 @@ static void fenster_rect(struct fenster *f, int x, int y, int w, int h, uint32_t
   }
 }
 
+/*
 static void fenster_circle(struct fenster *f, int x, int y, int r, uint32_t c) {
   for (int dy = -r; dy <= r; dy++) {
     for (int dx = -r; dx <= r; dx++) {
@@ -372,6 +374,7 @@ static void fenster_circle(struct fenster *f, int x, int y, int r, uint32_t c) {
     }
   }
 }
+*/
 
 void draw_icn(struct fenster *f, char *sprite, int x, int y, int scale, uint32_t color) {
   for (int dy = 0; dy < 8; dy++) {
@@ -386,7 +389,7 @@ void draw_icn(struct fenster *f, char *sprite, int x, int y, int scale, uint32_t
 static void fenster_text(struct fenster *f, unsigned char *font, int x, int y, char *s, int scale, uint32_t c) {
   while (*s) {
     char chr = *s++;
-    int size = (int)font[chr];
+    int size = font[(int)chr];
     if (chr > 32) {
       char *sprite = (char*)&font[chr*8*4 + 256];
       draw_icn(f, sprite, x, y, scale, c);

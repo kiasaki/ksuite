@@ -176,44 +176,83 @@ static void get_root_name(char *name, size_t maxlen) {
     }
 }
 
-/* Get window title */
-static void get_window_title(Window win, char *title, size_t maxlen) {
+/* Get title from a single window (no recursion) */
+static int get_title_from_window(Window win, char *title, size_t maxlen) {
     Atom actual_type;
     int actual_format;
     unsigned long nitems, bytes_after;
     unsigned char *prop = NULL;
 
-    title[0] = '\0';
-
-    /* Try _NET_WM_NAME first (UTF-8, used by most modern apps) */
     if (XGetWindowProperty(dpy, win, net_wm_name, 0, 256, False, utf8_string,
                            &actual_type, &actual_format, &nitems, &bytes_after,
-                           &prop) == Success && prop) {
+                           &prop) == Success && prop && nitems > 0) {
         strncpy(title, (char *)prop, maxlen - 1);
         title[maxlen - 1] = '\0';
         XFree(prop);
-        return;
+        return 1;
     }
 
-    /* Fall back to WM_NAME */
     if (XGetWindowProperty(dpy, win, wm_name, 0, 256, False, XA_STRING,
                            &actual_type, &actual_format, &nitems, &bytes_after,
-                           &prop) == Success && prop) {
+                           &prop) == Success && prop && nitems > 0) {
         strncpy(title, (char *)prop, maxlen - 1);
         title[maxlen - 1] = '\0';
         XFree(prop);
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Get window title - checks window and its children (for reparenting WMs) */
+static void get_window_title(Window win, char *title, size_t maxlen) {
+    title[0] = '\0';
+
+    if (get_title_from_window(win, title, maxlen)) return;
+
+    Window root_ret, parent_ret;
+    Window *children = NULL;
+    unsigned int nchildren = 0;
+
+    if (XQueryTree(dpy, win, &root_ret, &parent_ret, &children, &nchildren)) {
+        for (unsigned int i = 0; i < nchildren; i++) {
+            if (get_title_from_window(children[i], title, maxlen)) {
+                XFree(children);
+                return;
+            }
+        }
+        if (children) XFree(children);
     }
 }
 
-/* Get active window using XGetInputFocus */
+/* Get active window using XGetInputFocus, returning the top-level frame */
 static Window get_active_window(void) {
     Window focus;
     int revert_to;
     XGetInputFocus(dpy, &focus, &revert_to);
-    if (focus != None && focus != PointerRoot && focus != DefaultRootWindow(dpy)) {
-        return focus;
+    if (focus == None || focus == PointerRoot || focus == DefaultRootWindow(dpy)) {
+        return None;
     }
-    return None;
+
+    /* Walk up to find the direct child of root (the frame) */
+    Window current = focus;
+    Window parent, root_ret;
+    Window *children;
+    unsigned int nchildren;
+
+    while (current != None && current != DefaultRootWindow(dpy)) {
+        if (!XQueryTree(dpy, current, &root_ret, &parent, &children, &nchildren)) {
+            break;
+        }
+        if (children) XFree(children);
+
+        if (parent == DefaultRootWindow(dpy)) {
+            return current;
+        }
+        current = parent;
+    }
+
+    return focus;
 }
 
 /* Update window list using XQueryTree */
@@ -250,9 +289,10 @@ static void update_windows(void) {
         windows[num_windows].active = (children[i] == active_window);
         windows[num_windows].iconified = is_iconic;
 
-        if (windows[num_windows].title[0] != '\0') {
-            num_windows++;
+        if (windows[num_windows].title[0] == '\0') {
+            strncpy(windows[num_windows].title, "(Untitled)", sizeof(windows[num_windows].title) - 1);
         }
+        num_windows++;
     }
 
     if (children) XFree(children);

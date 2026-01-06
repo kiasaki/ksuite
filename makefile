@@ -11,10 +11,10 @@ else
 	endif
 endif
 
-all: kterm kbar kwm
+all: kterm kbar kwm knote
 
 clean:
-	rm -f kterm kbar kwm
+	rm -f kterm kbar kwm knote
 
 kterm: term.c fenster.h
 	$(CC) term.c -o $@ $(CFLAGS) $(LDFLAGS)
@@ -24,6 +24,9 @@ kbar: bar.c
 
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
+
+knote: note.c fenster.h
+	$(CC) note.c -o $@ $(CFLAGS) $(LDFLAGS)
 
 install: kwm kbar kterm
 	mkdir -p ~/bin

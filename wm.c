@@ -19,7 +19,7 @@ static Atom net_wm_name;
 static Atom utf8_string;
 
 static const char *ct[]  = {"st", NULL};
-static const char *cw[]  = {"mychromium", NULL};
+static const char *cw[]  = {"kweb", NULL};
 static const char *cs[]  = {"dmenu_run", NULL};
 static const char *cy[] = {"amixer", "-q", "set", "Master", "toggle", NULL};
 static const char *cu[] = {"amixer", "-q", "set", "Master", "5%-", "unmute", NULL};
@@ -45,7 +45,7 @@ static const char *cp[] = {"bri", "+", NULL};
 
 /* Scaling */
 static int k_scale = 1;
-#define BASE_TITLE_HEIGHT 20
+#define BASE_TITLE_HEIGHT 24
 #define BASE_BORDER 1
 static int title_height;
 static int border_width;
@@ -267,6 +267,14 @@ static void draw_title_bar(Client *c, int width) {
   x_error_occurred = 0;
   XPutImage(dpy, c->frame, c->gc, c->img, 0, 0, 0, 0, width, title_height);
   XSync(dpy, False);
+
+  XWindowAttributes fattr;
+  if (XGetWindowAttributes(dpy, c->frame, &fattr)) {
+    XSetForeground(dpy, c->gc, COLOR_BORDER);
+    XFillRectangle(dpy, c->frame, c->gc, 0, title_height, border_width, fattr.height - title_height);
+    XFillRectangle(dpy, c->frame, c->gc, fattr.width - border_width, title_height, border_width, fattr.height - title_height);
+    XFillRectangle(dpy, c->frame, c->gc, 0, fattr.height - border_width, fattr.width, border_width);
+  }
 }
 
 static int find_client(Window w) {
