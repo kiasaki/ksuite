@@ -39,3 +39,6 @@ fonts:
 	sed -i s/times15_uf2/times/g times15.h
 	xxd -i fonts/chicago12.uf2 > chicago12.h
 	sed -i s/chicago12_uf2/chicago/g chicago12.h
+
+x:
+	Xephyr -ac -br -noreset -screen 1024x768 :1
