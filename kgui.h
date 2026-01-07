@@ -160,7 +160,7 @@ static inline void kg_key_process(kg_key_repeat *kr, int *keys, int mod,
 
 static inline void kg_clipboard_copy(const char *text) {
     if (!text) return;
-    FILE *p = popen("xclip", "w");
+    FILE *p = popen("xclip -sel clipboard", "w");
     if (p) {
         fputs(text, p);
         pclose(p);
@@ -168,7 +168,7 @@ static inline void kg_clipboard_copy(const char *text) {
 }
 
 static inline char *kg_clipboard_paste(void) {
-    FILE *p = popen("xclip -o 2>/dev/null", "r");
+    FILE *p = popen("xclip -sel clipboard -o 2>/dev/null", "r");
     if (!p) return NULL;
 
     char *buf = NULL;

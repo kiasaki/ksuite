@@ -38,6 +38,22 @@ static Entry entries[MAX_ENTRIES];
 static int entry_count = 0;
 static char current_path[MAX_PATH_LEN];
 
+/* Input mode states */
+#define MODE_NORMAL 0
+#define MODE_RENAME 1
+#define MODE_FILTER 2
+static int input_mode = MODE_NORMAL;
+static char input_buf[256];
+static int input_len = 0;
+static int rename_entry_idx = -1;
+static char filter_buf[256];
+static int filter_len = 0;
+static int filtered_indices[MAX_ENTRIES];
+static int filtered_count = 0;
+
+/* Forward declarations */
+static void update_filter(void);
+
 static int text_width(const char *s) {
   return kg_text_width(ctx.font, s, ctx.scale.font_scale);
 }
@@ -102,6 +118,7 @@ static void load_directory(const char *path) {
   closedir(dir);
   
   qsort(entries, entry_count, sizeof(Entry), compare_entries);
+  update_filter();
 }
 
 static void format_size(off_t size, char *buf, size_t len) {
@@ -134,22 +151,25 @@ static void draw(void) {
   if (col_name_w < 100) col_name_w = 100;
   int scale = ctx.scale.scale;
 
+  int display_count = (input_mode == MODE_FILTER) ? filtered_count : entry_count;
+
   /* Update scroll with current content/viewport sizes */
   int footer_h = char_h + padding / 2 + scale;
   int visible_h = h - padding - footer_h;
-  kg_scroll_update(&scroll, entry_count * char_h, visible_h);
+  kg_scroll_update(&scroll, display_count * char_h, visible_h);
 
   fenster_rect(f, 0, 0, w, h, BG_COLOR);
 
   int y = padding - scroll.offset;
-  for (int i = 0; i < entry_count; i++) {
+  for (int i = 0; i < display_count; i++) {
     if (y + char_h < padding) {
       y += char_h;
       continue;
     }
     if (y >= h - footer_h) break;
 
-    Entry *e = &entries[i];
+    int entry_idx = (input_mode == MODE_FILTER) ? filtered_indices[i] : i;
+    Entry *e = &entries[entry_idx];
     uint32_t bg = e->selected ? SEL_COLOR : BG_COLOR;
     uint32_t fg = e->selected ? SEL_TEXT_COLOR : FG_COLOR;
 
@@ -185,19 +205,33 @@ static void draw(void) {
   fenster_rect(f, 0, h - char_h - padding/2, w, scale, FG_COLOR);
   fenster_rect(f, 0, h - char_h - padding/2+scale, w, char_h + padding/2 - scale, HEADER_COLOR);
 
-  char count_str[32];
-  snprintf(count_str, sizeof(count_str), "%d items", entry_count > 0 ? entry_count - 1 : 0);
-  int count_w = text_width(count_str);
+  if (input_mode == MODE_RENAME) {
+    char status[512];
+    snprintf(status, sizeof(status), "rename: %s", input_buf);
+    draw_text_clipped(padding, h - char_h, status, w - padding*2, FG_COLOR);
+  } else if (input_mode == MODE_FILTER) {
+    char status[512];
+    snprintf(status, sizeof(status), "/%s (%d matches)", filter_buf, filtered_count > 0 ? filtered_count - 1 : 0);
+    draw_text_clipped(padding, h - char_h, status, w - padding*2, FG_COLOR);
+  } else {
+    char count_str[32];
+    snprintf(count_str, sizeof(count_str), "%d items", entry_count > 0 ? entry_count - 1 : 0);
+    int count_w = text_width(count_str);
 
-  draw_text_clipped(padding, h - char_h, current_path, w - padding*3 - count_w, FG_COLOR);
-  draw_text_clipped(w - padding - count_w, h - char_h, count_str, count_w, FG_COLOR);
+    draw_text_clipped(padding, h - char_h, current_path, w - padding*3 - count_w, FG_COLOR);
+    draw_text_clipped(w - padding - count_w, h - char_h, count_str, count_w, FG_COLOR);
+  }
 }
 
 static int y_to_entry(int y) {
   if (y < padding) return -1;
-  int idx = (y - padding + scroll.offset) / char_h;
-  if (idx < 0 || idx >= entry_count) return -1;
-  return idx;
+  int display_idx = (y - padding + scroll.offset) / char_h;
+  if (input_mode == MODE_FILTER) {
+    if (display_idx < 0 || display_idx >= filtered_count) return -1;
+    return filtered_indices[display_idx];
+  }
+  if (display_idx < 0 || display_idx >= entry_count) return -1;
+  return display_idx;
 }
 
 static void clear_selection(void) {
@@ -324,11 +358,186 @@ static int visible_rows(void) {
   return scroll.visible_height / char_h;
 }
 
+static void update_filter(void) {
+  filtered_count = 0;
+  if (filter_len == 0) {
+    for (int i = 0; i < entry_count; i++) {
+      filtered_indices[filtered_count++] = i;
+    }
+    return;
+  }
+  for (int i = 0; i < entry_count; i++) {
+    if (strcasestr(entries[i].name, filter_buf) != NULL) {
+      filtered_indices[filtered_count++] = i;
+    }
+  }
+}
+
+static void delete_selected(void) {
+  for (int i = 0; i < entry_count; i++) {
+    if (!entries[i].selected) continue;
+    if (strcmp(entries[i].name, "../") == 0) continue;
+    
+    char fullpath[MAX_PATH_LEN];
+    char name[256];
+    strncpy(name, entries[i].name, sizeof(name));
+    int namelen = strlen(name);
+    if (namelen > 0 && name[namelen-1] == '/') {
+      name[namelen-1] = '\0';
+    }
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", current_path, name);
+    
+    struct stat st;
+    if (stat(fullpath, &st) == 0) {
+      if (S_ISDIR(st.st_mode)) {
+        char cmd[MAX_PATH_LEN + 32];
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", fullpath);
+        system(cmd);
+      } else {
+        unlink(fullpath);
+      }
+    }
+  }
+  load_directory(current_path);
+}
+
+static void do_rename(void) {
+  if (rename_entry_idx < 0 || rename_entry_idx >= entry_count) return;
+  if (input_len == 0) return;
+  
+  Entry *e = &entries[rename_entry_idx];
+  char oldpath[MAX_PATH_LEN], newpath[MAX_PATH_LEN];
+  char oldname[256];
+  strncpy(oldname, e->name, sizeof(oldname));
+  int namelen = strlen(oldname);
+  if (namelen > 0 && oldname[namelen-1] == '/') {
+    oldname[namelen-1] = '\0';
+  }
+  snprintf(oldpath, sizeof(oldpath), "%s/%s", current_path, oldname);
+  snprintf(newpath, sizeof(newpath), "%s/%s", current_path, input_buf);
+  
+  rename(oldpath, newpath);
+  load_directory(current_path);
+}
+
+static void create_new_file(void) {
+  char filepath[MAX_PATH_LEN];
+  snprintf(filepath, sizeof(filepath), "%s/untitled.txt", current_path);
+  
+  int n = 1;
+  while (access(filepath, F_OK) == 0) {
+    snprintf(filepath, sizeof(filepath), "%s/untitled%d.txt", current_path, n++);
+  }
+  
+  FILE *fp = fopen(filepath, "w");
+  if (fp) fclose(fp);
+  load_directory(current_path);
+}
+
+static void create_new_folder(void) {
+  char folderpath[MAX_PATH_LEN];
+  snprintf(folderpath, sizeof(folderpath), "%s/untitled", current_path);
+  
+  int n = 1;
+  while (access(folderpath, F_OK) == 0) {
+    snprintf(folderpath, sizeof(folderpath), "%s/untitled%d", current_path, n++);
+  }
+  
+  mkdir(folderpath, 0755);
+  load_directory(current_path);
+}
+
+static void start_rename(void) {
+  for (int i = 0; i < entry_count; i++) {
+    if (entries[i].selected && strcmp(entries[i].name, "../") != 0) {
+      rename_entry_idx = i;
+      char name[256];
+      strncpy(name, entries[i].name, sizeof(name));
+      int namelen = strlen(name);
+      if (namelen > 0 && name[namelen-1] == '/') {
+        name[namelen-1] = '\0';
+      }
+      strncpy(input_buf, name, sizeof(input_buf));
+      input_len = strlen(input_buf);
+      input_mode = MODE_RENAME;
+      return;
+    }
+  }
+}
+
+static char map_key(int k, int shift) {
+  char c = k;
+  if (shift) {
+    static const char *shifted = ")!@#$%^&*(";
+    if (k >= '0' && k <= '9') c = shifted[k - '0'];
+    else if (k >= 'a' && k <= 'z') c = k - 32;
+    else {
+      switch(k) {
+        case '-': c = '_'; break;
+        case '=': c = '+'; break;
+        case '[': c = '{'; break;
+        case ']': c = '}'; break;
+        case '\\': c = '|'; break;
+        case ';': c = ':'; break;
+        case '\'': c = '"'; break;
+        case ',': c = '<'; break;
+        case '.': c = '>'; break;
+        case '/': c = '?'; break;
+        case '`': c = '~'; break;
+      }
+    }
+  } else if (k >= 'A' && k <= 'Z') {
+    c = k + 32;
+  }
+  return c;
+}
+
 static void handle_key(int k, int mod, void *userdata) {
   (void)userdata;
   int ctrl = mod & KG_MOD_CTRL;
   int shift = mod & KG_MOD_SHIFT;
 
+  if (input_mode == MODE_RENAME) {
+    if (k == 27) { /* Escape */
+      input_mode = MODE_NORMAL;
+      input_len = 0;
+      input_buf[0] = '\0';
+    } else if (k == KG_KEY_RETURN) {
+      do_rename();
+      input_mode = MODE_NORMAL;
+      input_len = 0;
+      input_buf[0] = '\0';
+    } else if (k == KG_KEY_BACKSPACE) {
+      if (input_len > 0) {
+        input_buf[--input_len] = '\0';
+      }
+    } else if (k >= 32 && k < 127 && input_len < 254) {
+      input_buf[input_len++] = map_key(k, shift);
+      input_buf[input_len] = '\0';
+    }
+    return;
+  }
+
+  if (input_mode == MODE_FILTER) {
+    if (k == 27) { /* Escape */
+      input_mode = MODE_NORMAL;
+      filter_len = 0;
+      filter_buf[0] = '\0';
+      update_filter();
+    } else if (k == KG_KEY_BACKSPACE) {
+      if (filter_len > 0) {
+        filter_buf[--filter_len] = '\0';
+        update_filter();
+      }
+    } else if (k >= 32 && k < 127 && filter_len < 254) {
+      filter_buf[filter_len++] = map_key(k, shift);
+      filter_buf[filter_len] = '\0';
+      update_filter();
+    }
+    return;
+  }
+
+  /* Normal mode */
   if (ctrl && (k == 'Q' || k == 'q')) {
     quit_requested = 1;
   } else if (ctrl && (k == 'C' || k == 'c')) {
@@ -341,6 +550,19 @@ static void handle_key(int k, int mod, void *userdata) {
         entries[i].selected = 1;
       }
     }
+  } else if (ctrl && k == KG_KEY_BACKSPACE) {
+    delete_selected();
+  } else if (ctrl && (k == 'R' || k == 'r')) {
+    start_rename();
+  } else if (ctrl && (k == 'N' || k == 'n')) {
+    create_new_file();
+  } else if (ctrl && (k == 'D' || k == 'd')) {
+    create_new_folder();
+  } else if (k == '/') {
+    input_mode = MODE_FILTER;
+    filter_len = 0;
+    filter_buf[0] = '\0';
+    update_filter();
   } else if (shift && k == KG_KEY_UP) {
     kg_scroll_by(&scroll, -char_h);
   } else if (shift && k == KG_KEY_DOWN) {
@@ -392,6 +614,10 @@ static int run(const char *path) {
         /* Double-click: open directory or file */
         Entry *e = &entries[idx];
         if (e->is_dir) {
+          /* Reset filter mode when navigating */
+          input_mode = MODE_NORMAL;
+          filter_len = 0;
+          filter_buf[0] = '\0';
           if (strcmp(e->name, "../") == 0) {
             char *parent = strrchr(current_path, '/');
             if (parent && parent != current_path) {

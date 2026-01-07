@@ -362,6 +362,7 @@ static void handle_key(int k, int mod, void *userdata) {
 }
 
 static void handle_resize(void) {
+  needs_redraw = 1;
   struct fenster *f = ctx.f;
   int new_cols = (f->width - padding * 2) / char_w;
   int new_rows = (f->height - padding * 2) / char_h;
@@ -374,7 +375,6 @@ static void handle_resize(void) {
 
     struct winsize ws = { .ws_row = rows, .ws_col = cols };
     ioctl(master_fd, TIOCSWINSZ, &ws);
-    needs_redraw = 1;
   }
 }
 

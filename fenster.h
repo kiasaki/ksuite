@@ -296,7 +296,10 @@ FENSTER_API int fenster_loop(struct fenster *f) {
       f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
                             (char *)f->buf, f->width, f->height, 32, 0);
       break;
-    case ButtonPress:
+    case ButtonPress: {
+      int m = ev.xbutton.state;
+      f->mod = (!!(m & ControlMask)) | (!!(m & ShiftMask) << 1) |
+               (!!(m & Mod1Mask) << 2) | (!!(m & Mod4Mask) << 3);
       if (ev.xbutton.button == Button4) {
         f->scroll = 1; /* scroll up */
       } else if (ev.xbutton.button == Button5) {
@@ -304,7 +307,7 @@ FENSTER_API int fenster_loop(struct fenster *f) {
       } else {
         f->mouse = 1;
       }
-      break;
+    } break;
     case ButtonRelease:
       if (ev.xbutton.button != Button4 && ev.xbutton.button != Button5) {
         f->mouse = 0;
