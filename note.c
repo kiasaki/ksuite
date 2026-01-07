@@ -300,11 +300,13 @@ static void scroll_to_cursor(void) {
 }
 
 static int quit_requested = 0;
+static int cursor_moved = 0;
 
 static void handle_key(int k, int mod, void *userdata) {
   (void)userdata;
   int ctrl = mod & KG_MOD_CTRL;
   int shift = mod & KG_MOD_SHIFT;
+  cursor_moved = 1;
 
   if (ctrl && (k == 'Q' || k == 'q')) {
     quit_requested = 1;
@@ -446,9 +448,10 @@ static int run(const char *path) {
     }
 
     /* Handle keyboard */
+    cursor_moved = 0;
     kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
 
-    scroll_to_cursor();
+    if (cursor_moved) scroll_to_cursor();
     draw();
 
     kg_frame_end(&ctx);
