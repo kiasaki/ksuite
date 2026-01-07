@@ -1,15 +1,12 @@
 #define _XOPEN_SOURCE 600
 #define _GNU_SOURCE
-#include "fenster.h"
+#include "kgui.h"
 #include "fonts/terminus16.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <pty.h>
 #include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/wait.h>
@@ -20,13 +17,11 @@
 
 #define W 800
 #define H 1000
-#define BASE_FONT_SCALE 1
 #define BASE_CHAR_W 9
 #define BASE_CHAR_H 16
 #define BASE_PADDING 2
 
-static int k_scale = 1;
-static int font_scale = 1;
+static kg_ctx ctx;
 static int char_w = 9;
 static int char_h = 16;
 static int padding = 2;
@@ -42,12 +37,11 @@ static int cols = 80, rows = 24;
 static struct tsm_screen *screen = NULL;
 static struct tsm_vte *vte = NULL;
 
-static struct fenster *g_fenster = NULL;
-
 /* Mouse selection state */
 static int mouse_pressed = 0;
 static int selection_active = 0;
 static char *clipboard_text = NULL;
+static int idle_frames = 0;
 
 static uint32_t palette[TSM_COLOR_NUM] = {
   [TSM_COLOR_BLACK]         = 0x1d1f21,
@@ -100,38 +94,6 @@ static void vte_write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *
   }
 }
 
-static void clipboard_copy(const char *text) {
-  if (!text) return;
-  FILE *p = popen("xclip", "w");
-  if (p) {
-    fputs(text, p);
-    pclose(p);
-  }
-}
-
-static char *clipboard_paste(void) {
-  FILE *p = popen("xclip -o 2>/dev/null", "r");
-  if (!p) return NULL;
-
-  char *buf = NULL;
-  size_t len = 0;
-  size_t cap = 0;
-  char tmp[256];
-
-  while (fgets(tmp, sizeof(tmp), p)) {
-    size_t n = strlen(tmp);
-    if (len + n >= cap) {
-      cap = cap ? cap * 2 : 256;
-      buf = realloc(buf, cap);
-    }
-    memcpy(buf + len, tmp, n);
-    len += n;
-  }
-  if (buf) buf[len] = '\0';
-  pclose(p);
-  return buf;
-}
-
 static void pixel_to_cell(struct fenster *f, int px, int py, int *cx, int *cy) {
   (void)f;
   *cx = (px - padding) / char_w;
@@ -142,28 +104,28 @@ static void pixel_to_cell(struct fenster *f, int px, int py, int *cx, int *cy) {
   if (*cy >= rows) *cy = rows - 1;
 }
 
-static void handle_mouse(struct fenster *f) {
+static void handle_mouse(void) {
   int cx, cy;
-  pixel_to_cell(f, f->x, f->y, &cx, &cy);
+  pixel_to_cell(ctx.f, ctx.mouse_x, ctx.mouse_y, &cx, &cy);
 
-  if (f->mouse && !mouse_pressed) {
+  if (ctx.mouse_pressed) {
     /* Mouse button pressed - start selection */
     mouse_pressed = 1;
     selection_active = 1;
     tsm_screen_selection_reset(screen);
     tsm_screen_selection_start(screen, cx, cy);
     needs_redraw = 1;
-  } else if (f->mouse && mouse_pressed) {
+  } else if (ctx.mouse_down && mouse_pressed) {
     /* Mouse dragging - update selection */
     tsm_screen_selection_target(screen, cx, cy);
     needs_redraw = 1;
-  } else if (!f->mouse && mouse_pressed) {
+  } else if (ctx.mouse_released && mouse_pressed) {
     /* Mouse button released - copy selection */
     mouse_pressed = 0;
     if (selection_active) {
       char *sel = NULL;
       if (tsm_screen_selection_copy(screen, &sel) >= 0 && sel) {
-        clipboard_copy(sel);
+        kg_clipboard_copy(sel);
         free(clipboard_text);
         clipboard_text = sel;
       }
@@ -226,7 +188,7 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch,
   (void)age;
   (void)data;
 
-  struct fenster *f = g_fenster;
+  struct fenster *f = ctx.f;
   int x = padding + posx * char_w;
   int y = padding + posy * char_h;
 
@@ -246,10 +208,10 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch,
     char ascii = box_to_ascii(c);
     if (ascii) {
       char tmp[2] = { ascii, 0 };
-      fenster_text(f, terminus, x, y, tmp, font_scale, fg);
+      fenster_text(f, terminus, x, y, tmp, ctx.scale.font_scale, fg);
     } else if (c > 32 && c < 127) {
       char tmp[2] = { (char)c, 0 };
-      fenster_text(f, terminus, x, y, tmp, font_scale, fg);
+      fenster_text(f, terminus, x, y, tmp, ctx.scale.font_scale, fg);
     }
   }
 
@@ -274,12 +236,6 @@ static int spawn_shell(void) {
   fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
   return 0;
 }
-
-static int prev_keys[256];
-static int64_t key_press_time[256];
-static int64_t key_repeat_time[256];
-#define KEY_REPEAT_DELAY 400
-#define KEY_REPEAT_RATE 30
 
 static uint32_t fenster_key_to_xkb(int k, int shift) {
   switch (k) {
@@ -347,12 +303,14 @@ static void cancel_selection(void) {
   if (selection_active) {
     tsm_screen_selection_reset(screen);
     selection_active = 0;
+    needs_redraw = 1;
   }
 }
 
-static void handle_key(int k, int mod) {
-  int ctrl = mod & 1;
-  int shift = mod & 2;
+static void handle_key(int k, int mod, void *userdata) {
+  (void)userdata;
+  int ctrl = mod & KG_MOD_CTRL;
+  int shift = mod & KG_MOD_SHIFT;
 
   if (ctrl && (k == 'Q' || k == 'q')) {
     quit_requested = 1;
@@ -361,7 +319,7 @@ static void handle_key(int k, int mod) {
 
   /* Paste with Ctrl+Shift+V */
   if (ctrl && shift && (k == 'V' || k == 'v')) {
-    char *paste = clipboard_paste();
+    char *paste = kg_clipboard_paste();
     if (paste) {
       write(master_fd, paste, strlen(paste));
       free(paste);
@@ -370,20 +328,24 @@ static void handle_key(int k, int mod) {
   }
 
   /* Scrollback navigation with shift+arrows */
-  if (shift && k == 17) { /* Up */
+  if (shift && k == KG_KEY_UP) {
     tsm_screen_sb_up(screen, 1);
+    needs_redraw = 1;
     return;
   }
-  if (shift && k == 18) { /* Down */
+  if (shift && k == KG_KEY_DOWN) {
     tsm_screen_sb_down(screen, 1);
+    needs_redraw = 1;
     return;
   }
-  if (shift && k == 3) { /* Page Up */
+  if (shift && k == KG_KEY_PAGEUP) {
     tsm_screen_sb_page_up(screen, 1);
+    needs_redraw = 1;
     return;
   }
-  if (shift && k == 4) { /* Page Down */
+  if (shift && k == KG_KEY_PAGEDOWN) {
     tsm_screen_sb_page_down(screen, 1);
+    needs_redraw = 1;
     return;
   }
 
@@ -399,30 +361,8 @@ static void handle_key(int k, int mod) {
   tsm_vte_handle_keyboard(vte, keysym, keysym, mods, unicode);
 }
 
-static void handle_keyboard(struct fenster *f) {
-  int64_t now_time = fenster_time();
-  for (int k = 0; k < 256; k++) {
-    if (f->keys[k] && !prev_keys[k]) {
-      handle_key(k, f->mod);
-      key_press_time[k] = now_time;
-      key_repeat_time[k] = now_time;
-      needs_redraw = 1;
-    } else if (f->keys[k] && prev_keys[k]) {
-      int64_t held = now_time - key_press_time[k];
-      if (held > KEY_REPEAT_DELAY) {
-        int64_t since_repeat = now_time - key_repeat_time[k];
-        if (since_repeat > KEY_REPEAT_RATE) {
-          handle_key(k, f->mod);
-          key_repeat_time[k] = now_time;
-          needs_redraw = 1;
-        }
-      }
-    }
-    prev_keys[k] = f->keys[k];
-  }
-}
-
-static void handle_resize(struct fenster *f) {
+static void handle_resize(void) {
+  struct fenster *f = ctx.f;
   int new_cols = (f->width - padding * 2) / char_w;
   int new_rows = (f->height - padding * 2) / char_h;
 
@@ -438,29 +378,27 @@ static void handle_resize(struct fenster *f) {
   }
 }
 
-static void draw(struct fenster *f) {
+static void draw(void) {
+  struct fenster *f = ctx.f;
   int w = f->width;
   int h = f->height;
 
   for (int i = 0; i < w * h; i++) f->buf[i] = default_bg;
 
-  g_fenster = f;
   tsm_screen_draw(screen, draw_cb, NULL);
 }
 
 static int run(void) {
-  char *scale_env = getenv("K_SCALE");
-  if (scale_env) {
-    k_scale = atoi(scale_env);
-    if (k_scale < 1) k_scale = 1;
-  }
-  font_scale = BASE_FONT_SCALE * k_scale;
-  char_w = BASE_CHAR_W * k_scale;
-  char_h = BASE_CHAR_H * k_scale;
-  padding = BASE_PADDING * k_scale;
-
   uint32_t buf[W * H];
   struct fenster f = { .title = "term", .width = W, .height = H, .buf = buf };
+
+  /* Initialize kgui context */
+  ctx = kg_init(&f, terminus);
+
+  /* Apply scale to dimensions */
+  char_w = KG_SCALED(BASE_CHAR_W, ctx.scale);
+  char_h = KG_SCALED(BASE_CHAR_H, ctx.scale);
+  padding = KG_SCALED(BASE_PADDING, ctx.scale);
 
   cols = (W - padding * 2) / char_w;
   rows = (H - padding * 2) / char_h;
@@ -500,17 +438,21 @@ static int run(void) {
   fenster_open(&f);
 
   while (fenster_loop(&f) == 0 && !quit_requested) {
+    /* Use longer timeout when idle to reduce CPU usage */
     fd_set fds;
-    struct timeval tv = { .tv_sec = 0, .tv_usec = 16000 }; /* ~60 FPS */
+    int timeout_us = (idle_frames > 30) ? 100000 : 16000;  /* 100ms idle, 16ms active */
+    struct timeval tv = { .tv_sec = 0, .tv_usec = timeout_us };
     FD_ZERO(&fds);
     FD_SET(master_fd, &fds);
 
+    int had_activity = 0;
     if (select(master_fd + 1, &fds, NULL, NULL, &tv) > 0) {
       char rd[4096];
       ssize_t n;
       while ((n = read(master_fd, rd, sizeof(rd))) > 0) {
         tsm_vte_input(vte, rd, n);
         needs_redraw = 1;
+        had_activity = 1;
       }
       if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
         int status;
@@ -518,11 +460,38 @@ static int run(void) {
       }
     }
 
-    handle_resize(&f);
-    handle_mouse(&f);
-    handle_keyboard(&f);
+    /* Update mouse state */
+    kg_frame_begin(&ctx);
+
+    handle_resize();
+    handle_mouse();
+
+    /* Handle scroll wheel for scrollback */
+    if (ctx.scroll > 0) {
+      tsm_screen_sb_up(screen, 3);
+      needs_redraw = 1;
+    } else if (ctx.scroll < 0) {
+      tsm_screen_sb_down(screen, 3);
+      needs_redraw = 1;
+    }
+
+    /* Process keyboard with key repeat */
+    kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
+
+    /* Detect input activity */
+    if (f.keys[0] || ctx.mouse_pressed || ctx.mouse_released || ctx.mouse_down) {
+      had_activity = 1;
+    }
+
+    /* Track idle state */
+    if (had_activity || needs_redraw) {
+      idle_frames = 0;
+    } else if (idle_frames < 100) {
+      idle_frames++;
+    }
+
     if (needs_redraw) {
-      draw(&f);
+      draw();
       needs_redraw = 0;
     }
   }

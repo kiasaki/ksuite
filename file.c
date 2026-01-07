@@ -1,31 +1,30 @@
 #define _DEFAULT_SOURCE 1
-#include "fenster.h"
+#include "kgui.h"
 #include "fonts/chicago12.h"
 #include <dirent.h>
-#include <stdio.h>
 #include <unistd.h>
-#include <string.h>
 #include <sys/stat.h>
 
 #define W 800
 #define H 800
 #define MAX_ENTRIES 4096
 #define MAX_PATH_LEN 4096
-#define BASE_FONT_SCALE 1
 #define BASE_CHAR_H 16
 #define BASE_PADDING 8
+#define BASE_COL_SIZE_W 80
+#define BASE_COL_DATE_W 140
 #define BG_COLOR 0xffffff
 #define FG_COLOR 0x000000
 #define SEL_COLOR 0x000000
 #define SEL_TEXT_COLOR 0xffffff
 #define HEADER_COLOR 0xffffff
 
-static int k_scale = 1;
-static int font_scale = 1;
+static kg_ctx ctx;
+static kg_scroll scroll;
 static int char_h = 16;
 static int padding = 8;
-
-static unsigned char *font = chicago;
+static int col_size_w = 80;
+static int col_date_w = 140;
 
 typedef struct {
   char name[256];
@@ -38,53 +37,9 @@ typedef struct {
 static Entry entries[MAX_ENTRIES];
 static int entry_count = 0;
 static char current_path[MAX_PATH_LEN];
-static int scroll_y = 0;
-
-static int col_size_w = 80;
-static int col_date_w = 140;
-
-static void clipboard_copy(const char *text) {
-  if (!text) return;
-  FILE *p = popen("xclip", "w");
-  if (p) {
-    fputs(text, p);
-    pclose(p);
-  }
-}
-
-static char *clipboard_paste(void) {
-  FILE *p = popen("xclip -o 2>/dev/null", "r");
-  if (!p) return NULL;
-
-  char *buf = NULL;
-  size_t len = 0;
-  size_t cap = 0;
-  char tmp[256];
-
-  while (fgets(tmp, sizeof(tmp), p)) {
-    size_t n = strlen(tmp);
-    if (len + n >= cap) {
-      cap = cap ? cap * 2 : 256;
-      buf = realloc(buf, cap);
-    }
-    memcpy(buf + len, tmp, n);
-    len += n;
-  }
-  if (buf) buf[len] = '\0';
-  pclose(p);
-  return buf;
-}
-
-static int char_width(char c) {
-  return font[(unsigned char)c] * font_scale;
-}
 
 static int text_width(const char *s) {
-  int w = 0;
-  for (int i = 0; s[i]; i++) {
-    w += char_width(s[i]);
-  }
-  return w;
+  return kg_text_width(ctx.font, s, ctx.scale.font_scale);
 }
 
 static int compare_entries(const void *a, const void *b) {
@@ -102,7 +57,7 @@ static int compare_entries(const void *a, const void *b) {
 
 static void load_directory(const char *path) {
   entry_count = 0;
-  scroll_y = 0;
+  scroll = kg_scroll_init();
   
   if (realpath(path, current_path) == NULL) {
     strcpy(current_path, path);
@@ -166,84 +121,81 @@ static void format_date(time_t t, char *buf, size_t len) {
   strftime(buf, len, "%Y-%m-%d %H:%M", tm);
 }
 
-static void draw_text_clipped(struct fenster *f, int x, int y, const char *s, int max_w, uint32_t color) {
-  if (x < 0 || y < 0 || x >= f->width || y >= f->height) return;
-  int w = 0;
-  char tmp[2] = {0, 0};
-  while (*s) {
-    int cw = char_width(*s);
-    if (w + cw > max_w) break;
-    if (x + w >= f->width) break;
-    tmp[0] = *s;
-    fenster_text(f, font, x + w, y, tmp, font_scale, color);
-    w += cw;
-    s++;
-  }
+static void draw_text_clipped(int x, int y, const char *s, int max_w, uint32_t color) {
+  if (x < 0 || y < 0 || x >= ctx.f->width || y >= ctx.f->height) return;
+  kg_text_clipped(&ctx, x, y, s, max_w, color);
 }
 
-static void draw(struct fenster *f) {
+static void draw(void) {
+  struct fenster *f = ctx.f;
   int w = f->width;
   int h = f->height;
   int col_name_w = w - col_size_w - col_date_w;
   if (col_name_w < 100) col_name_w = 100;
-  
+  int scale = ctx.scale.scale;
+
+  /* Update scroll with current content/viewport sizes */
+  int footer_h = char_h + padding / 2 + scale;
+  int visible_h = h - padding - footer_h;
+  kg_scroll_update(&scroll, entry_count * char_h, visible_h);
+
   fenster_rect(f, 0, 0, w, h, BG_COLOR);
-  
-  int y = padding - scroll_y;
+
+  int y = padding - scroll.offset;
   for (int i = 0; i < entry_count; i++) {
     if (y + char_h < padding) {
       y += char_h;
       continue;
     }
-    if (y >= h) break;
-    
+    if (y >= h - footer_h) break;
+
     Entry *e = &entries[i];
     uint32_t bg = e->selected ? SEL_COLOR : BG_COLOR;
     uint32_t fg = e->selected ? SEL_TEXT_COLOR : FG_COLOR;
-    
+
     if (y >= 0 && y < h) {
       int row_h = (y + char_h > h) ? h - y : char_h;
       fenster_rect(f, 0, y, w, row_h, bg);
     }
-    
+
     int x = padding;
-    draw_text_clipped(f, x, y, e->name, col_name_w - padding, fg);
+    draw_text_clipped(x, y, e->name, col_name_w - padding, fg);
     x += col_name_w;
-    
+
     if (!e->is_dir || strcmp(e->name, "../") == 0) {
       if (strcmp(e->name, "../") != 0) {
         char size_str[32];
         format_size(e->size, size_str, sizeof(size_str));
-        draw_text_clipped(f, x - padding + (col_size_w - text_width(size_str)), y, size_str, col_size_w - padding, fg);
+        draw_text_clipped(x - padding + (col_size_w - text_width(size_str)), y, size_str, col_size_w - padding, fg);
       }
     } else {
-      draw_text_clipped(f, x - padding + (col_size_w - text_width("--")), y, "--", col_size_w - padding, fg);
+      draw_text_clipped(x - padding + (col_size_w - text_width("--")), y, "--", col_size_w - padding, fg);
     }
     x += col_size_w;
-    
+
     if (e->mtime > 0) {
       char date_str[32];
       format_date(e->mtime, date_str, sizeof(date_str));
-      draw_text_clipped(f, x - padding*2 + (col_date_w - text_width(date_str)), y, date_str, col_date_w - padding, fg);
+      draw_text_clipped(x - padding*2 + (col_date_w - text_width(date_str)), y, date_str, col_date_w - padding, fg);
     }
-    
+
     y += char_h;
   }
-  
-  fenster_rect(f, 0, h - char_h - padding/2, w, k_scale, FG_COLOR);
-  fenster_rect(f, 0, h - char_h - padding/2+k_scale, w, char_h + padding/2 - k_scale, HEADER_COLOR);
-  
+
+  fenster_rect(f, 0, h - char_h - padding/2, w, scale, FG_COLOR);
+  fenster_rect(f, 0, h - char_h - padding/2+scale, w, char_h + padding/2 - scale, HEADER_COLOR);
+
   char count_str[32];
   snprintf(count_str, sizeof(count_str), "%d items", entry_count > 0 ? entry_count - 1 : 0);
   int count_w = text_width(count_str);
-  
-  draw_text_clipped(f, padding, h - char_h, current_path, w - padding*3 - count_w, FG_COLOR);
-  draw_text_clipped(f, w - padding - count_w, h - char_h, count_str, count_w, FG_COLOR);
+
+  draw_text_clipped(padding, h - char_h, current_path, w - padding*3 - count_w, FG_COLOR);
+  draw_text_clipped(w - padding - count_w, h - char_h, count_str, count_w, FG_COLOR);
 }
 
 static int y_to_entry(int y) {
   if (y < padding) return -1;
-  int idx = (y - padding + scroll_y) / char_h;
+  int idx = (y - padding + scroll.offset) / char_h;
   if (idx < 0 || idx >= entry_count) return -1;
   return idx;
 }
@@ -260,6 +212,22 @@ static const char *get_extension(const char *path) {
   return dot;
 }
 
+static int is_plaintext(const char *path) {
+  FILE *fp = fopen(path, "rb");
+  if (!fp) return 0;
+  unsigned char buf[256];
+  size_t n = fread(buf, 1, sizeof(buf), fp);
+  fclose(fp);
+  if (n == 0) return 1; /* empty file counts as text */
+  for (size_t i = 0; i < n; i++) {
+    unsigned char c = buf[i];
+    /* printable ASCII, tab, newline, carriage return */
+    if ((c >= 32 && c <= 126) || c == '\t' || c == '\n' || c == '\r') continue;
+    return 0;
+  }
+  return 1;
+}
+
 static void open_file(const char *path) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -274,6 +242,8 @@ static void open_file(const char *path) {
       execlp("knote", "knote", path, NULL);
     } else if (strcasecmp(ext, ".html") == 0 || strcasecmp(ext, ".svg") == 0) {
       execlp("surf", "surf", path, NULL);
+    } else if (is_plaintext(path)) {
+      execlp("knote", "knote", path, NULL);
     }
     execlp("xdg-open", "xdg-open", path, NULL);
     exit(1);
@@ -284,11 +254,11 @@ static void copy_selected(void) {
   char *buf = NULL;
   size_t len = 0;
   size_t cap = 0;
-  
+
   for (int i = 0; i < entry_count; i++) {
     if (!entries[i].selected) continue;
     if (strcmp(entries[i].name, "../") == 0) continue;
-    
+
     char fullpath[MAX_PATH_LEN];
     char name[256];
     strncpy(name, entries[i].name, sizeof(name));
@@ -297,7 +267,7 @@ static void copy_selected(void) {
       name[namelen-1] = '\0';
     }
     snprintf(fullpath, sizeof(fullpath), "%s/%s", current_path, name);
-    
+
     size_t pathlen = strlen(fullpath);
     if (len + pathlen + 2 >= cap) {
       cap = cap ? cap * 2 : 1024;
@@ -307,18 +277,18 @@ static void copy_selected(void) {
     memcpy(buf + len, fullpath, pathlen);
     len += pathlen;
   }
-  
+
   if (buf) {
     buf[len] = '\0';
-    clipboard_copy(buf);
+    kg_clipboard_copy(buf);
     free(buf);
   }
 }
 
 static void paste_files(void) {
-  char *clip = clipboard_paste();
+  char *clip = kg_clipboard_paste();
   if (!clip) return;
-  
+
   char *line = strtok(clip, "\n");
   while (line) {
     while (*line == ' ' || *line == '\t') line++;
@@ -326,58 +296,39 @@ static void paste_files(void) {
     while (linelen > 0 && (line[linelen-1] == ' ' || line[linelen-1] == '\t' || line[linelen-1] == '\r')) {
       line[--linelen] = '\0';
     }
-    
+
     struct stat st;
     if (stat(line, &st) == 0) {
       char *basename = strrchr(line, '/');
       basename = basename ? basename + 1 : line;
-      
+
       char destpath[MAX_PATH_LEN];
       snprintf(destpath, sizeof(destpath), "%s/%s", current_path, basename);
-      
+
       char cmd[MAX_PATH_LEN * 2 + 32];
       snprintf(cmd, sizeof(cmd), "mv \"%s\" \"%s\"", line, destpath);
       system(cmd);
     }
-    
+
     line = strtok(NULL, "\n");
   }
-  
+
   free(clip);
   load_directory(current_path);
 }
 
-static int prev_keys[256];
-static int64_t key_press_time[256];
-static int64_t key_repeat_time[256];
-#define KEY_REPEAT_DELAY 300
-#define KEY_REPEAT_RATE 30
-
-static int prev_mouse = 0;
-static int64_t last_click_time = 0;
 static int last_click_entry = -1;
-#define DOUBLE_CLICK_MS 400
-
 static int quit_requested = 0;
-static int window_h = H;
-
-static int max_scroll(void) {
-  int footer_h = char_h + padding / 2 + 1;
-  int visible_h = window_h - padding - footer_h;
-  int content_h = entry_count * char_h;
-  return content_h > visible_h ? content_h - visible_h : 0;
-}
 
 static int visible_rows(void) {
-  int footer_h = char_h + padding / 2 + 1;
-  int visible_h = window_h - padding - footer_h;
-  return visible_h / char_h;
+  return scroll.visible_height / char_h;
 }
 
-static void handle_key(int k, int mod) {
-  int ctrl = mod & 1;
-  int shift = (mod >> 1) & 1;
-  
+static void handle_key(int k, int mod, void *userdata) {
+  (void)userdata;
+  int ctrl = mod & KG_MOD_CTRL;
+  int shift = mod & KG_MOD_SHIFT;
+
   if (ctrl && (k == 'Q' || k == 'q')) {
     quit_requested = 1;
   } else if (ctrl && (k == 'C' || k == 'c')) {
@@ -390,39 +341,33 @@ static void handle_key(int k, int mod) {
         entries[i].selected = 1;
       }
     }
-  } else if (shift && k == 17) { /* Up */
-    scroll_y -= char_h;
-    if (scroll_y < 0) scroll_y = 0;
-  } else if (shift && k == 18) { /* Down */
-    scroll_y += char_h;
-    int ms = max_scroll();
-    if (scroll_y > ms) scroll_y = ms;
-  } else if (shift && k == 3) { /* Page Up */
-    scroll_y -= visible_rows() * char_h;
-    if (scroll_y < 0) scroll_y = 0;
-  } else if (shift && k == 4) { /* Page Down */
-    scroll_y += visible_rows() * char_h;
-    int ms = max_scroll();
-    if (scroll_y > ms) scroll_y = ms;
+  } else if (shift && k == KG_KEY_UP) {
+    kg_scroll_by(&scroll, -char_h);
+  } else if (shift && k == KG_KEY_DOWN) {
+    kg_scroll_by(&scroll, char_h);
+  } else if (shift && k == KG_KEY_PAGEUP) {
+    kg_scroll_by(&scroll, -visible_rows() * char_h);
+  } else if (shift && k == KG_KEY_PAGEDOWN) {
+    kg_scroll_by(&scroll, visible_rows() * char_h);
   }
 }
 
 static int run(const char *path) {
-  char *scale_env = getenv("K_SCALE");
-  if (scale_env) {
-    k_scale = atoi(scale_env);
-    if (k_scale < 1) k_scale = 1;
-  }
-  font_scale = BASE_FONT_SCALE * k_scale;
-  char_h = BASE_CHAR_H * k_scale;
-  padding = BASE_PADDING * k_scale;
-  col_size_w = col_size_w * k_scale;
-  col_date_w = col_date_w * k_scale;
-  
   uint32_t *buf = malloc(W * H * sizeof(uint32_t));
   if (!buf) return 1;
   struct fenster f = { .title = "file", .width = W, .height = H, .buf = buf };
-  
+
+  /* Initialize kgui context */
+  ctx = kg_init(&f, chicago);
+  ctx.key_repeat = kg_key_repeat_init_custom(300, 30);
+  scroll = kg_scroll_init();
+
+  /* Apply scale to dimensions */
+  char_h = KG_SCALED(BASE_CHAR_H, ctx.scale);
+  padding = KG_SCALED(BASE_PADDING, ctx.scale);
+  col_size_w = KG_SCALED(BASE_COL_SIZE_W, ctx.scale);
+  col_date_w = KG_SCALED(BASE_COL_DATE_W, ctx.scale);
+
   if (path) {
     load_directory(path);
   } else {
@@ -433,23 +378,18 @@ static int run(const char *path) {
       load_directory("/");
     }
   }
-  
+
   fenster_open(&f);
-  int64_t now = fenster_time();
-  
+
   while (fenster_loop(&f) == 0 && !quit_requested) {
-    if (f.size_changed) {
-      f.size_changed = 0;
-      buf = f.buf;
-      window_h = f.height;
-    }
-    
-    if (f.mouse && !prev_mouse) {
-      int64_t click_time = fenster_time();
-      int idx = y_to_entry(f.y);
-      
-      if (idx >= 0 && idx == last_click_entry && 
-          click_time - last_click_time < DOUBLE_CLICK_MS) {
+    kg_frame_begin(&ctx);
+
+    /* Handle mouse clicks */
+    if (ctx.mouse_pressed) {
+      int idx = y_to_entry(ctx.mouse_y);
+
+      if (ctx.double_clicked && idx >= 0 && idx == last_click_entry) {
+        /* Double-click: open directory or file */
         Entry *e = &entries[idx];
         if (e->is_dir) {
           if (strcmp(e->name, "../") == 0) {
@@ -478,51 +418,35 @@ static int run(const char *path) {
         }
         last_click_entry = -1;
       } else {
+        /* Single click: select/toggle */
         if (idx >= 0) {
-          int ctrl = f.mod & 1;
+          int ctrl = ctx.f->mod & KG_MOD_CTRL;
           if (!ctrl) {
             clear_selection();
           }
           entries[idx].selected = !entries[idx].selected;
         } else {
-          if (!(f.mod & 1)) {
+          if (!(ctx.f->mod & KG_MOD_CTRL)) {
             clear_selection();
           }
         }
         last_click_entry = idx;
-        last_click_time = click_time;
       }
     }
-    prev_mouse = f.mouse;
-    
-    int64_t now_time = fenster_time();
-    for (int k = 0; k < 256; k++) {
-      if (f.keys[k] && !prev_keys[k]) {
-        handle_key(k, f.mod);
-        key_press_time[k] = now_time;
-        key_repeat_time[k] = now_time;
-      } else if (f.keys[k] && prev_keys[k]) {
-        int64_t held = now_time - key_press_time[k];
-        if (held > KEY_REPEAT_DELAY) {
-          int64_t since_repeat = now_time - key_repeat_time[k];
-          if (since_repeat > KEY_REPEAT_RATE) {
-            handle_key(k, f.mod);
-            key_repeat_time[k] = now_time;
-          }
-        }
-      }
-      prev_keys[k] = f.keys[k];
+
+    /* Handle scroll wheel */
+    if (ctx.scroll != 0) {
+      kg_scroll_by(&scroll, -ctx.scroll * char_h * 3);
     }
-    
-    draw(&f);
-    
-    int64_t time = fenster_time();
-    if (time - now < 1000 / 60) {
-      fenster_sleep(1000 / 60 - (time - now));
-    }
-    now = time;
+
+    /* Handle keyboard */
+    kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
+
+    draw();
+
+    kg_frame_end(&ctx);
   }
-  
+
   fenster_close(&f);
   return 0;
 }

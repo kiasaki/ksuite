@@ -11,21 +11,24 @@ else
 	endif
 endif
 
-all: kterm knote kbar kwm kfile
+all: kterm knote kbar kwm kfile kcalc
 
 clean:
-	rm -f kterm kbar kwm knote kfile
+	rm -f kterm kbar kwm knote kfile kcalc
 
 TSM_SRC = tsm/tsm-screen.c tsm/tsm-selection.c tsm/tsm-render.c tsm/tsm-unicode.c tsm/tsm-vte.c tsm/tsm-vte-charsets.c
 
-kterm: term.c fenster.h $(TSM_SRC)
+kterm: term.c kgui.h fenster.h $(TSM_SRC)
 	$(CC) term.c $(TSM_SRC) -o $@ $(CFLAGS) $(LDFLAGS) -lutil -Itsm
 
-knote: note.c fenster.h
+knote: note.c kgui.h fenster.h
 	$(CC) note.c -o $@ $(CFLAGS) $(LDFLAGS)
 
-kfile: file.c fenster.h
+kfile: file.c kgui.h fenster.h
 	$(CC) file.c -o $@ $(CFLAGS) $(LDFLAGS) -lrt
+
+kcalc: calc.c kgui.h fenster.h
+	$(CC) calc.c -o $@ $(CFLAGS) $(LDFLAGS) -lm
 
 kbar: bar.c
 	$(CC) bar.c -o $@ $(CFLAGS) $(LDFLAGS)
@@ -33,12 +36,13 @@ kbar: bar.c
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
 
-install: kwm kbar kterm knote kfile
+install: kwm kbar kterm knote kfile kcalc
 	mkdir -p ~/bin
 	install -m 755 kbar ~/bin/
 	install -m 755 kterm ~/bin/
 	install -m 755 knote ~/bin/
 	install -m 755 kfile ~/bin/
+	install -m 755 kcalc ~/bin/
 	sudo install -m 755 kwm /usr/bin/
 
 fonts:

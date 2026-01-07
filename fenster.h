@@ -30,6 +30,7 @@ struct fenster {
   int x;
   int y;
   int mouse;
+  int scroll; /* scroll wheel: -1 down, 0 none, +1 up (X11 only for now) */
 #if defined(__APPLE__)
   id wnd;
 #elif defined(_WIN32)
@@ -296,8 +297,18 @@ FENSTER_API int fenster_loop(struct fenster *f) {
                             (char *)f->buf, f->width, f->height, 32, 0);
       break;
     case ButtonPress:
+      if (ev.xbutton.button == Button4) {
+        f->scroll = 1; /* scroll up */
+      } else if (ev.xbutton.button == Button5) {
+        f->scroll = -1; /* scroll down */
+      } else {
+        f->mouse = 1;
+      }
+      break;
     case ButtonRelease:
-      f->mouse = (ev.type == ButtonPress);
+      if (ev.xbutton.button != Button4 && ev.xbutton.button != Button5) {
+        f->mouse = 0;
+      }
       break;
     case MotionNotify:
       f->x = ev.xmotion.x, f->y = ev.xmotion.y;
