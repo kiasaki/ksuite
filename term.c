@@ -17,12 +17,12 @@
 
 #define W 1000
 #define H 1000
-#define BASE_CHAR_W 8
+#define BASE_CHAR_W 9
 #define BASE_CHAR_H 16
 #define BASE_PADDING 2
 
 static kg_ctx ctx;
-static int char_w = 8;
+static int char_w = 9;
 static int char_h = 16;
 static int padding = 2;
 
@@ -441,9 +441,15 @@ static int run(void) {
   fenster_open(&f);
 
   while (fenster_loop(&f) == 0 && !quit_requested) {
+    /* Update mouse/key state immediately after fenster_loop */
+    kg_frame_begin(&ctx);
+
+    /* Process keyboard before blocking on select */
+    kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
+
     /* Use longer timeout when idle to reduce CPU usage */
     fd_set fds;
-    int timeout_us = (idle_frames > 30) ? 100000 : 16000;  /* 100ms idle, 16ms active */
+    int timeout_us = (idle_frames > 30) ? 50000 : 16000;  /* 100ms idle, 16ms active */
     struct timeval tv = { .tv_sec = 0, .tv_usec = timeout_us };
     FD_ZERO(&fds);
     FD_SET(master_fd, &fds);
@@ -463,9 +469,6 @@ static int run(void) {
       }
     }
 
-    /* Update mouse state */
-    kg_frame_begin(&ctx);
-
     handle_resize();
     handle_mouse();
 
@@ -477,9 +480,6 @@ static int run(void) {
       tsm_screen_sb_down(screen, 3);
       needs_redraw = 1;
     }
-
-    /* Process keyboard with key repeat */
-    kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
 
     /* Detect input activity */
     if (f.keys[0] || ctx.mouse_pressed || ctx.mouse_released || ctx.mouse_down) {
