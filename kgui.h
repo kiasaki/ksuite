@@ -160,7 +160,7 @@ static inline void kg_key_process(kg_key_repeat *kr, int *keys, int mod,
 
 static inline void kg_clipboard_copy(const char *text) {
     if (!text) return;
-    FILE *p = popen("xclip -sel clipboard", "w");
+    FILE *p = popen("xclip", "w");
     if (p) {
         fputs(text, p);
         pclose(p);
@@ -196,10 +196,10 @@ static inline char *kg_clipboard_paste_sel(const char *sel) {
 }
 
 static inline char *kg_clipboard_paste(void) {
-    char *buf = kg_clipboard_paste_sel("clipboard");
+    char *buf = kg_clipboard_paste_sel(NULL);
     if (buf && buf[0] != '\0') return buf;
     free(buf);
-    return kg_clipboard_paste_sel(NULL);
+    return kg_clipboard_paste_sel("clipboard");
 }
 
 /* ============================================================================

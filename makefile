@@ -11,10 +11,10 @@ else
 	endif
 endif
 
-all: kterm knote kbar kwm kfile kcalc
+all: kterm knote kbar kwm kdm kfile kcalc
 
 clean:
-	rm -f kterm kbar kwm knote kfile kcalc
+	rm -f kterm kbar kwm kdm knote kfile kcalc
 
 TSM_SRC = tsm/tsm-screen.c tsm/tsm-selection.c tsm/tsm-render.c tsm/tsm-unicode.c tsm/tsm-vte.c tsm/tsm-vte-charsets.c
 
@@ -36,6 +36,9 @@ kbar: bar.c
 kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
 
+kdm: dm.c
+	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lpam -lpam_misc
+
 install: kwm kbar kterm knote kfile kcalc
 	mkdir -p ~/bin
 	install -m 755 kbar ~/bin/
@@ -44,6 +47,12 @@ install: kwm kbar kterm knote kfile kcalc
 	install -m 755 kfile ~/bin/
 	install -m 755 kcalc ~/bin/
 	sudo install -m 755 kwm /usr/bin/
+	sudo install -m 755 kdm /usr/bin/
+
+installdm:
+	sudo install -m 644 dm.pam /etc/pam.d/kdm
+	sudo cp dm.service /etc/systemd/system/display-manager.service
+	sudo chown root:root /etc/systemd/system/display-manager.service
 
 fonts:
 	xxd -i fonts/newyork14.uf2 > fonts/newyork14.h
