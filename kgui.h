@@ -167,8 +167,14 @@ static inline void kg_clipboard_copy(const char *text) {
     }
 }
 
-static inline char *kg_clipboard_paste(void) {
-    FILE *p = popen("xclip -sel clipboard -o 2>/dev/null", "r");
+static inline char *kg_clipboard_paste_sel(const char *sel) {
+    char cmd[64];
+    if (sel) {
+        snprintf(cmd, sizeof(cmd), "xclip -sel %s -o 2>/dev/null", sel);
+    } else {
+        snprintf(cmd, sizeof(cmd), "xclip -o 2>/dev/null");
+    }
+    FILE *p = popen(cmd, "r");
     if (!p) return NULL;
 
     char *buf = NULL;
@@ -187,6 +193,13 @@ static inline char *kg_clipboard_paste(void) {
     if (buf) buf[len] = '\0';
     pclose(p);
     return buf;
+}
+
+static inline char *kg_clipboard_paste(void) {
+    char *buf = kg_clipboard_paste_sel("clipboard");
+    if (buf && buf[0] != '\0') return buf;
+    free(buf);
+    return kg_clipboard_paste_sel(NULL);
 }
 
 /* ============================================================================

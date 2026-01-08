@@ -340,7 +340,7 @@ static void paste_files(void) {
       snprintf(destpath, sizeof(destpath), "%s/%s", current_path, basename);
 
       char cmd[MAX_PATH_LEN * 2 + 32];
-      snprintf(cmd, sizeof(cmd), "mv \"%s\" \"%s\"", line, destpath);
+      snprintf(cmd, sizeof(cmd), "cp -r \"%s\" \"%s\"", line, destpath);
       system(cmd);
     }
 
