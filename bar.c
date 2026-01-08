@@ -612,9 +612,9 @@ int main(void) {
             }
         }
 
-        /* Update time every second and keep bar on top */
+        /* Update time every 500ms and keep bar on top */
         int64_t now = get_time();
-        if (now > last_time + 100) {
+        if (now > last_time + 500) {
             last_time = now;
 
             /* Ensure bar stays in correct position */

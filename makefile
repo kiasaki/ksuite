@@ -7,7 +7,7 @@ else
 	ifeq ($(UNAME_S),Darwin)
 		LDFLAGS = -framework Cocoa
 	else
-		LDFLAGS = -lX11
+		LDFLAGS = -lX11 -lXext
 	endif
 endif
 
@@ -37,7 +37,7 @@ kwm: wm.c
 	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lXinerama
 
 kdm: dm.c
-	$(CC) wm.c -o $@ $(CFLAGS) $(LDFLAGS) -lpam -lpam_misc
+	$(CC) dm.c -o $@ $(CFLAGS) $(LDFLAGS) -lpam -lpam_misc
 
 install: kwm kbar kterm knote kfile kcalc
 	mkdir -p ~/bin

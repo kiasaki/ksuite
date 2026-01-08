@@ -15,14 +15,14 @@
 #include "tsm/libtsm.h"
 #include "tsm/xkbcommon/xkbcommon-keysyms.h"
 
-#define W 800
+#define W 1000
 #define H 1000
-#define BASE_CHAR_W 9
+#define BASE_CHAR_W 8
 #define BASE_CHAR_H 16
 #define BASE_PADDING 2
 
 static kg_ctx ctx;
-static int char_w = 9;
+static int char_w = 8;
 static int char_h = 16;
 static int padding = 2;
 
@@ -362,10 +362,13 @@ static void handle_key(int k, int mod, void *userdata) {
 }
 
 static void handle_resize(void) {
-  needs_redraw = 1;
   struct fenster *f = ctx.f;
   int new_cols = (f->width - padding * 2) / char_w;
   int new_rows = (f->height - padding * 2) / char_h;
+
+  if (f->size_changed) {
+    needs_redraw = 1;
+  }
 
   if (new_cols != cols || new_rows != rows) {
     cols = new_cols;
@@ -492,6 +495,7 @@ static int run(void) {
 
     if (needs_redraw) {
       draw();
+      f.dirty = true;
       needs_redraw = 0;
     }
   }

@@ -11,7 +11,10 @@
 #define _DEFAULT_SOURCE 1
 #include <X11/XKBlib.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
+#include <X11/extensions/XShm.h>
+#include <sys/shm.h>
 #include <time.h>
 #endif
 
@@ -22,6 +25,7 @@
 struct fenster {
   const char *title;
   bool size_changed;
+  bool dirty; /* set to true when buffer needs to be redrawn to screen */
   int width;
   int height;
   uint32_t *buf;
@@ -40,6 +44,8 @@ struct fenster {
   Window w;
   GC gc;
   XImage *img;
+  XShmSegmentInfo shminfo;
+  bool use_shm;
 #endif
 };
 
@@ -262,6 +268,64 @@ FENSTER_API int fenster_loop(struct fenster *f) {
 // clang-format off
 static int FENSTER_KEYCODES[124] = {XK_BackSpace,8,XK_Delete,127,XK_Down,18,XK_End,5,XK_Escape,27,XK_Home,2,XK_Insert,26,XK_Left,20,XK_Page_Down,4,XK_Page_Up,3,XK_Return,10,XK_Right,19,XK_Tab,9,XK_Up,17,XK_apostrophe,39,XK_backslash,92,XK_bracketleft,91,XK_bracketright,93,XK_comma,44,XK_equal,61,XK_grave,96,XK_minus,45,XK_period,46,XK_semicolon,59,XK_slash,47,XK_space,32,XK_a,65,XK_b,66,XK_c,67,XK_d,68,XK_e,69,XK_f,70,XK_g,71,XK_h,72,XK_i,73,XK_j,74,XK_k,75,XK_l,76,XK_m,77,XK_n,78,XK_o,79,XK_p,80,XK_q,81,XK_r,82,XK_s,83,XK_t,84,XK_u,85,XK_v,86,XK_w,87,XK_x,88,XK_y,89,XK_z,90,XK_0,48,XK_1,49,XK_2,50,XK_3,51,XK_4,52,XK_5,53,XK_6,54,XK_7,55,XK_8,56,XK_9,57};
 // clang-format on
+static int fenster_shm_error = 0;
+static int fenster_shm_handler(Display *dpy, XErrorEvent *ev) {
+  (void)dpy; (void)ev;
+  fenster_shm_error = 1;
+  return 0;
+}
+
+static void fenster_create_shm_image(struct fenster *f) {
+  f->use_shm = false;
+  if (!XShmQueryExtension(f->dpy)) return;
+  
+  f->img = XShmCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, NULL,
+                           &f->shminfo, f->width, f->height);
+  if (!f->img) return;
+  
+  f->shminfo.shmid = shmget(IPC_PRIVATE, f->img->bytes_per_line * f->img->height,
+                            IPC_CREAT | 0777);
+  if (f->shminfo.shmid < 0) {
+    XDestroyImage(f->img);
+    f->img = NULL;
+    return;
+  }
+  
+  f->shminfo.shmaddr = f->img->data = shmat(f->shminfo.shmid, NULL, 0);
+  if (f->shminfo.shmaddr == (char *)-1) {
+    shmctl(f->shminfo.shmid, IPC_RMID, NULL);
+    XDestroyImage(f->img);
+    f->img = NULL;
+    return;
+  }
+  f->shminfo.readOnly = False;
+  
+  fenster_shm_error = 0;
+  XErrorHandler old_handler = XSetErrorHandler(fenster_shm_handler);
+  if (!XShmAttach(f->dpy, &f->shminfo)) {
+    XSetErrorHandler(old_handler);
+    shmdt(f->shminfo.shmaddr);
+    shmctl(f->shminfo.shmid, IPC_RMID, NULL);
+    XDestroyImage(f->img);
+    f->img = NULL;
+    return;
+  }
+  XSync(f->dpy, False);
+  XSetErrorHandler(old_handler);
+  
+  if (fenster_shm_error) {
+    shmdt(f->shminfo.shmaddr);
+    shmctl(f->shminfo.shmid, IPC_RMID, NULL);
+    XDestroyImage(f->img);
+    f->img = NULL;
+    return;
+  }
+  
+  shmctl(f->shminfo.shmid, IPC_RMID, NULL);
+  f->buf = (uint32_t *)f->img->data;
+  f->use_shm = true;
+}
+
 FENSTER_API int fenster_open(struct fenster *f) {
   f->dpy = XOpenDisplay(NULL);
   int screen = DefaultScreen(f->dpy);
@@ -273,28 +337,55 @@ FENSTER_API int fenster_open(struct fenster *f) {
   XStoreName(f->dpy, f->w, f->title);
   XMapWindow(f->dpy, f->w);
   XSync(f->dpy, f->w);
-  f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
-                        (char *)f->buf, f->width, f->height, 32, 0);
+  
+  fenster_create_shm_image(f);
+  if (!f->use_shm) {
+    f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
+                          (char *)f->buf, f->width, f->height, 32, 0);
+  }
+  f->dirty = true;
   return 0;
 }
-FENSTER_API void fenster_close(struct fenster *f) { XCloseDisplay(f->dpy); }
+FENSTER_API void fenster_close(struct fenster *f) {
+  if (f->use_shm) {
+    XShmDetach(f->dpy, &f->shminfo);
+    shmdt(f->shminfo.shmaddr);
+  }
+  if (f->img) XDestroyImage(f->img);
+  XCloseDisplay(f->dpy);
+}
 FENSTER_API int fenster_loop(struct fenster *f) {
   XEvent ev;
-  XPutImage(f->dpy, f->w, f->gc, f->img, 0, 0, 0, 0, f->width, f->height);
+  if (f->dirty) {
+    if (f->use_shm) {
+      XShmPutImage(f->dpy, f->w, f->gc, f->img, 0, 0, 0, 0, f->width, f->height, False);
+    } else {
+      XPutImage(f->dpy, f->w, f->gc, f->img, 0, 0, 0, 0, f->width, f->height);
+    }
+    f->dirty = false;
+  }
   XFlush(f->dpy);
   while (XPending(f->dpy)) {
+    f->size_changed = false;
     XNextEvent(f->dpy, &ev);
     switch (ev.type) {
     case ConfigureNotify:
       f->size_changed = true;
       f->width = ev.xconfigure.width;
       f->height = ev.xconfigure.height;
-      //free(f->img->data);
-      free(f->img);
-      //XDestroyImage(f->img);
-      f->buf = (uint32_t*)malloc(f->width * f->height * sizeof(uint32_t));
-      f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
-                            (char *)f->buf, f->width, f->height, 32, 0);
+      if (f->use_shm) {
+        XShmDetach(f->dpy, &f->shminfo);
+        shmdt(f->shminfo.shmaddr);
+        XDestroyImage(f->img);
+        f->img = NULL;
+        fenster_create_shm_image(f);
+      } else {
+        free(f->img);
+        f->buf = (uint32_t*)malloc(f->width * f->height * sizeof(uint32_t));
+        f->img = XCreateImage(f->dpy, DefaultVisual(f->dpy, 0), 24, ZPixmap, 0,
+                              (char *)f->buf, f->width, f->height, 32, 0);
+      }
+      f->dirty = true;
       break;
     case ButtonPress: {
       int m = ev.xbutton.state;
