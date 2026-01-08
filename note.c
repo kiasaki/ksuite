@@ -453,6 +453,7 @@ static int run(const char *path) {
 
     if (cursor_moved) scroll_to_cursor();
     draw();
+    ctx.f->dirty = true;
 
     kg_frame_end(&ctx);
   }

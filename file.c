@@ -669,6 +669,7 @@ static int run(const char *path) {
     kg_key_process(&ctx.key_repeat, f.keys, f.mod, handle_key, NULL);
 
     draw();
+    ctx.f->dirty = true;
 
     kg_frame_end(&ctx);
   }
